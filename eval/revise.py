@@ -260,7 +260,7 @@ def main() -> None:
     summary["review_goal_verdicts"] = {
         n: {"defect": verdicts(prepared[n][2]), "control": verdicts(controls[n])} for n in SCENARIOS
     }
-    flagged = [v != "met" for n in SCENARIOS for v in verdicts(prepared[n][2])]
+    flagged = [v in ("not-met", "partly") for n in SCENARIOS for v in verdicts(prepared[n][2])]
     false_alarm = [v in ("not-met", "partly") for n in SCENARIOS for v in verdicts(controls[n])]
     summary["review_defect_flagged"] = wilson(sum(flagged), len(flagged))
     summary["review_control_false_alarm"] = wilson(sum(false_alarm), len(false_alarm))
