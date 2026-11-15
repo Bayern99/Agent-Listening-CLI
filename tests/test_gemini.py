@@ -227,13 +227,49 @@ def test_listen_retries_rate_limit_once(tmp_path, fake, monkeypatch):
     assert len(gens) == 2
 
 
-def test_listen_retry_hint_capped(tmp_path, fake, monkeypatch):
+def test_listen_retry_hint_seconds_over_cap_not_retried(tmp_path, fake, monkeypatch):
     monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
     monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 200s.")
     slept = []
+    with pytest.raises(gemini.ProviderError) as exc:
+        _retry_listen(tmp_path, fake, slept)
+    assert exc.value.code == "rate_limit_error"
+    assert slept == []
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+
+
+def test_listen_retry_hint_daily_quota_not_retried(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 19h54m1s.")
+    slept = []
+    with pytest.raises(gemini.ProviderError) as exc:
+        _retry_listen(tmp_path, fake, slept)
+    assert exc.value.code == "rate_limit_error"
+    assert slept == []
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+
+
+def test_listen_retry_hint_minutes_within_cap(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 1m5s.")
+    slept = []
     reply = _retry_listen(tmp_path, fake, slept)
     assert reply.attempts == 2
-    assert slept == [90.0]
+    assert slept == [65.0]
+
+
+def test_listen_retry_hint_minutes_over_cap_not_retried(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 2m.")
+    slept = []
+    with pytest.raises(gemini.ProviderError) as exc:
+        _retry_listen(tmp_path, fake, slept)
+    assert exc.value.code == "rate_limit_error"
+    assert slept == []
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
 
 
 def test_listen_retry_exhausted_after_three(tmp_path, fake, monkeypatch):

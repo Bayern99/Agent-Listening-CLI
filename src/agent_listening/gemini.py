@@ -16,7 +16,8 @@ SUPPORTED_SERIES = "0.4"
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 _FILE_URI_RE = re.compile(r"files/\S+")
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
-_RETRY_AFTER_RE = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+_RETRY_AFTER_RE = re.compile(r"retry in ((?:\d+(?:\.\d+)?[hms])+)", re.IGNORECASE)
+_DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)([hms])", re.IGNORECASE)
 
 _RETRYABLE_ERRORS = ("rate_limit_error", "server_error")
 _MAX_ATTEMPTS = 3
@@ -43,11 +44,22 @@ class Reply:
     attempts: int
 
 
-def _retry_delay_s(error: ProviderError, failures: int) -> float:
-    """Server-hinted delay when the message carries "retry in Ns" (capped), else backoff."""
-    match = _RETRY_AFTER_RE.search(error.message)
-    if match is not None:
-        return min(float(match.group(1)), _RETRY_AFTER_CAP_S)
+def _hinted_delay_s(message: str) -> float | None:
+    """Seconds from a "retry in 19h54m1s" / "1m5s" / "20s" style hint, if present."""
+    match = _RETRY_AFTER_RE.search(message)
+    if match is None:
+        return None
+    scales = {"h": 3600.0, "m": 60.0, "s": 1.0}
+    return sum(
+        float(value) * scales[unit.lower()] for value, unit in _DURATION_PART_RE.findall(match.group(1))
+    )
+
+
+def _retry_delay_s(error: ProviderError, failures: int) -> float | None:
+    """Delay before the next attempt; None when a hint exceeds the cap (don't retry)."""
+    hinted = _hinted_delay_s(error.message)
+    if hinted is not None:
+        return hinted if hinted <= _RETRY_AFTER_CAP_S else None
     return _RETRY_BACKOFF_S[min(failures - 1, len(_RETRY_BACKOFF_S) - 1)]
 
 
@@ -235,8 +247,10 @@ def listen(
                 code = "PROVIDER_AUTH" if proc.returncode == 3 else "PROVIDER_ERROR"
                 error = _agent_mode_error(proc.stderr, code, proc.returncode)
                 if error.code in _RETRYABLE_ERRORS and attempts < _MAX_ATTEMPTS:
-                    sleep(_retry_delay_s(error, attempts))
-                    continue
+                    delay = _retry_delay_s(error, attempts)
+                    if delay is not None:
+                        sleep(delay)
+                        continue
                 raise error
             break
         latency_s = time.monotonic() - started
