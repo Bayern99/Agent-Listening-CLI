@@ -763,3 +763,56 @@ def test_compare_spectral_global_contradicts_unchanged(tmp_path):
     diff = next(m for m in ev["measurements"] if m["kind"] == "signal-difference")
     assert diff["result"]["spectral"]["global_change"] is True
     assert ev["claims"][0]["status"] == "contradicted"
+
+
+def test_recheck_claims_reapplies_current_checks(tmp_path):
+    from agent_listening import audio, tasks
+
+    a, b = _compare_pair(tmp_path, [(0.3, 0.6, 3.0)])
+    payload = {
+        "summary": "s",
+        "claims": [
+            {
+                "text": "the tail is quieter",
+                "aspect": "dynamics",
+                "scale": "work",
+                "loci": [{"clip": "B", "start": 4.0, "end": 5.0}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            }
+        ],
+    }
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, payload))
+    proc = _run(["compare", str(a), str(b), "--follow-up", "0"], env)
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert doc["claims"][0]["status"] == "contradicted"
+
+    # tolerates documents written before follow_up/attempts existed
+    del doc["request"]["follow_up"]
+    del doc["producer"]["attempts"]
+    rechecked = tasks.recheck_claims(doc)
+    claim = rechecked["claims"][0]
+    assert claim["id"] == doc["claims"][0]["id"]
+    assert claim["status"] == "contradicted"
+    assert [m["kind"] for m in rechecked["measurements"]] == [
+        "pcm-identity",
+        "signal-difference",
+    ]
+    diff_checks = [c for c in claim["checks"] if c["name"] == "signal-difference"]
+    assert len(diff_checks) == 1 and diff_checks[0]["measurement"] == "m2"
+
+    # positional overrides are verified against the recorded sha256
+    rechecked2 = tasks.recheck_claims(doc, audio_paths=[str(a), str(b)])
+    assert rechecked2["claims"] == rechecked["claims"]
+
+    b.write_bytes(a.read_bytes())
+    with pytest.raises(audio.IdentityError):
+        tasks.recheck_claims(doc)
+
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, payload))
+    proc = _run(["hear", str(a)], env)
+    assert proc.returncode == 0, proc.stderr
+    with pytest.raises(tasks.UsageError):
+        tasks.recheck_claims(json.loads(proc.stdout))

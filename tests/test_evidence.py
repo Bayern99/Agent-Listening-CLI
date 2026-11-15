@@ -653,7 +653,8 @@ def test_apply_difference_check_boundaries():
     chk = out[0].checks[-1]
     assert (
         chk.result == "pass"
-        and chk.detail == "locus overlaps a measured waveform difference region (tolerance 2.0s)"
+        and chk.detail
+        == "measured waveform difference covers a locus by 0.50s (required 0.25s, tolerance 2.0s)"
     )
     out = evidence.apply_difference_check(
         [claim("differs")],
@@ -663,7 +664,10 @@ def test_apply_difference_check_boundaries():
         tolerance_s=0.5,
     )
     chk = out[0].checks[-1]
-    assert chk.result == "fail" and chk.detail == "no measured difference region within 0.5s of any locus"
+    assert chk.result == "fail" and chk.detail == (
+        "measured difference covers no locus by the required "
+        "min(0.25 x locus duration, 0.5s) (tolerance 0.5s)"
+    )
     # unchanged: overlap of exactly 0.5s is not a breach; >0.5 is
     out = evidence.apply_difference_check(
         [claim("unchanged", 1.0, 2.0)], regions={"A": [(1.5, 2.5)]}, global_change=False, measurement_id="m1"
@@ -679,6 +683,55 @@ def test_apply_difference_check_boundaries():
     )
     chk = out[0].checks[-1]
     assert chk.result == "n/a" and chk.detail == "global change: region check not applicable"
+
+
+def test_apply_difference_check_coverage_requirement():
+    """Differs support needs real region coverage, not mere proximity."""
+
+    def claim(start, end, inp="A"):
+        return evidence.make_claim(
+            id="c1",
+            origin="model",
+            text="t",
+            aspect="timbre",
+            scale="event",
+            loci=[Locus(inp, start, end)],
+            relation="differs",
+            basis="audio",
+            confidence="low",
+        )
+
+    def check(c, waveform=None, spectral=None):
+        return evidence.apply_difference_check(
+            [c],
+            regions=waveform or {},
+            global_change=False,
+            measurement_id="m1",
+            spectral_regions=spectral,
+        )[0].checks[-1]
+
+    # holdout geometry: 0.1s sliver inside a 16.5s locus (needs 0.5s) -> fail
+    chk = check(claim(4.1, 20.6), waveform={"A": [(20.35, 20.45)]})
+    assert chk.result == "fail"
+    # mute geometry: locus mostly covered -> pass
+    chk = check(claim(7.8, 12.4), waveform={"A": [(7.95, 14.05)]})
+    assert chk.result == "pass" and "waveform" in chk.detail
+    # short event: 0.5s locus needs only 0.125s coverage -> pass
+    chk = check(claim(3.0, 3.5), waveform={"A": [(3.1, 3.6)]})
+    assert chk.result == "pass"
+    # same short event with only proximity (region ends at locus start + tolerance) -> fail
+    chk = check(claim(3.0, 3.5), waveform={"A": [(0.0, 1.05)]})
+    assert chk.result == "fail"
+    # zero-length locus: any coverage > 0 supports
+    chk = check(claim(3.0, 3.0), waveform={"A": [(2.9, 3.1)]})
+    assert chk.result == "pass"
+    chk = check(claim(3.0, 3.0), waveform={"A": [(0.0, 1.0)]})
+    assert chk.result == "fail"
+    # spectral regions support on the same coverage rule
+    chk = check(claim(1.0, 3.0), waveform={}, spectral={"A": [(1.2, 4.0)]})
+    assert chk.result == "pass" and "spectral" in chk.detail
+    chk = check(claim(1.0, 10.0), waveform={}, spectral={"A": [(9.9, 10.1)]})
+    assert chk.result == "fail"
 
 
 def test_apply_order_check_mismatch_and_details():

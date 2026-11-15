@@ -210,6 +210,36 @@ def test_signal_difference_advanced_b_regions_in_a_time(tmp_path):
     assert all("only_in" not in r or r["start"] > 0.2 for r in regions)
 
 
+def test_signal_difference_residual_floor_in_near_silence(tmp_path):
+    """-100 dBFS noise on a decaying tail is ratio-high but inaudible: no regions."""
+    t = np.arange(int(4 * SR)) / SR
+    env = 0.1 * np.exp(-t / 0.37)
+    a_data = np.stack([env * np.sin(2 * np.pi * 220 * t)] * 2, axis=1)
+    rng = np.random.default_rng(3)
+    b_data = a_data + rng.normal(0, 1e-5, a_data.shape)
+    a = _id(write_wav(tmp_path / "a.wav", a_data, SR))
+    b = _id(write_wav(tmp_path / "b.wav", b_data, SR))
+    m = audio.signal_difference(a, b)
+    assert m.params["residual_floor_dbfs"] == -80
+    assert m.result["regions"] == [], m.result["regions"]
+
+
+def test_signal_difference_residual_floor_passes_real_change(tmp_path):
+    """A residual around -40 dBFS is above the audibility floor and still marked."""
+    t = np.arange(int(4 * SR)) / SR
+    env = 0.1 * np.exp(-t / 0.37)
+    a_data = np.stack([env * np.sin(2 * np.pi * 220 * t)] * 2, axis=1)
+    rng = np.random.default_rng(4)
+    b_data = a_data.copy()
+    lo, hi = int(2.9 * SR), int(3.4 * SR)
+    b_data[lo:hi] += rng.normal(0, 1e-2, (hi - lo, 2))
+    a = _id(write_wav(tmp_path / "a.wav", a_data, SR))
+    b = _id(write_wav(tmp_path / "b.wav", b_data, SR))
+    m = audio.signal_difference(a, b)
+    regions = m.result["regions"]
+    assert any(r["start"] <= 3.0 and r["end"] >= 3.3 for r in regions), regions
+
+
 def test_signal_difference_global_gain(tmp_path):
     a_data = sine(SR, 2.0)
     b_data = a_data * 2.0

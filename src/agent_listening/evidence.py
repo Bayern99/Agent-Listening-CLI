@@ -56,6 +56,8 @@ EVIDENCE_STATUSES = ("complete", "partial", "failed")
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 
 DIFFERENCE_TOLERANCE_S = 2.0
+DIFFERS_SUPPORT_FRACTION = 0.25
+DIFFERS_SUPPORT_MAX_S = 0.5
 LOCUS_TOLERANCE_S = 0.5
 
 LOCUS_CHECK = "locus-in-range"
@@ -649,27 +651,35 @@ def apply_difference_check(
                 sets += ((regions, "waveform"),)
             if spectral and not spectral_global:
                 sets += ((spectral_regions or {}, "spectral"),)
-            hit = next(
-                (
-                    name
-                    for region_map, name in sets
-                    for loc in claim.loci
-                    for rs, re_ in region_map.get(loc.input, ())
-                    if _overlaps(loc.start, loc.end, rs - tolerance_s, re_ + tolerance_s) > 0
-                ),
-                None,
-            )
+            hit: tuple[str, float, float] | None = None
+            for region_map, name in sets:
+                for loc in claim.loci:
+                    coverage = sum(
+                        _overlaps(loc.start - tolerance_s, loc.end + tolerance_s, rs, re_)
+                        for rs, re_ in region_map.get(loc.input, ())
+                    )
+                    required = min(DIFFERS_SUPPORT_FRACTION * (loc.end - loc.start), DIFFERS_SUPPORT_MAX_S)
+                    supported = coverage > 0 if loc.end <= loc.start else coverage >= required
+                    if supported:
+                        hit = (name, coverage, required)
+                        break
+                if hit is not None:
+                    break
             if hit is not None:
+                name, coverage, required = hit
                 return Check(
                     DIFFERENCE_CHECK,
                     "pass",
-                    f"locus overlaps a measured {hit} difference region (tolerance {tolerance_s}s)",
+                    f"measured {name} difference covers a locus by {coverage:.2f}s "
+                    f"(required {required:.2f}s, tolerance {tolerance_s}s)",
                     measurement_id,
                 )
             return Check(
                 DIFFERENCE_CHECK,
                 "fail",
-                f"no measured difference region within {tolerance_s}s of any locus",
+                f"measured difference covers no locus by the required "
+                f"min({DIFFERS_SUPPORT_FRACTION} x locus duration, {DIFFERS_SUPPORT_MAX_S}s) "
+                f"(tolerance {tolerance_s}s)",
                 measurement_id,
             )
         if global_change and not spectral:

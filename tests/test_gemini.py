@@ -227,6 +227,17 @@ def test_listen_retries_rate_limit_once(tmp_path, fake, monkeypatch):
     assert len(gens) == 2
 
 
+def test_listen_retries_connection_error(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "connection_error")
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", 'error sending request: Post ".../interactions": EOF')
+    slept = []
+    reply = _retry_listen(tmp_path, fake, slept)
+    assert reply.attempts == 2
+    assert slept == [15.0]
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 2
+
+
 def test_listen_retry_hint_seconds_over_cap_not_retried(tmp_path, fake, monkeypatch):
     monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
     monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 200s.")

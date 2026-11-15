@@ -19,7 +19,7 @@ _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 _RETRY_AFTER_RE = re.compile(r"retry in ((?:\d+(?:\.\d+)?[hms])+)", re.IGNORECASE)
 _DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)([hms])", re.IGNORECASE)
 
-_RETRYABLE_ERRORS = ("rate_limit_error", "server_error")
+_RETRYABLE_ERRORS = ("rate_limit_error", "server_error", "connection_error")
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_S = (15.0, 45.0)
 _RETRY_AFTER_CAP_S = 90.0
@@ -207,8 +207,9 @@ def listen(
 ) -> Reply:
     """One non-streaming structured `gemini-api generate` call.
 
-    Transient provider errors (rate_limit_error, server_error) retry up to
-    _MAX_ATTEMPTS total attempts; uploaded inputs are reused across attempts."""
+    Transient provider errors (rate_limit_error, server_error, connection_error)
+    retry up to _MAX_ATTEMPTS total attempts; uploaded inputs are reused across
+    attempts."""
     cli_version = version(executable)
     if cli_version.split(".")[:2] != SUPPORTED_SERIES.split("."):
         raise ProviderError(

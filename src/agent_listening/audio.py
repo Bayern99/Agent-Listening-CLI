@@ -254,12 +254,13 @@ def _estimate_lag(
 
 def _window_ratios(
     a_path: Path, b_path: Path, a_start: int, b_start: int, frames: int, sr: int, same_channels: bool
-) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-    """Per-window residual ratio in dB and a mask of windows with signal."""
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]]:
+    """Per-window residual ratio in dB, absolute residual level in dBFS (max channel), and alive mask."""
     win = int(0.1 * sr)
     hop = int(0.05 * sr)
     n_win = max(0, (frames - win) // hop + 1)
     ratio = np.zeros(n_win)
+    residual = np.full(n_win, -np.inf)
     alive = np.zeros(n_win, dtype=bool)
     floor_per_sample = 10 ** (-90 / 10)
     block = int(10 * sr)
@@ -286,8 +287,9 @@ def _window_ratios(
             ):
                 continue
             ratio[base + w] = 10 * np.log10(max(num, 1e-30) / den)
+            residual[base + w] = 10 * np.log10(max(float(diff2[seg].sum(axis=0).max()), 1e-30) / win)
             alive[base + w] = True
-    return ratio, alive
+    return ratio, residual, alive
 
 
 def _read_frames(path: Path, start: int, frames: int) -> npt.NDArray[Any]:
@@ -424,6 +426,7 @@ def signal_difference(a: Input, b: Input) -> Measurement:
         "max_lag_s": 1.0,
         "merge_gap_s": 0.25,
         "silence_dbfs": -90,
+        "residual_floor_dbfs": -80,
     }
     if a.format.sample_rate != b.format.sample_rate:
         return Measurement(
@@ -448,9 +451,13 @@ def signal_difference(a: Input, b: Input) -> Measurement:
         a_start, b_start = -lag, 0
     frames = min(a.format.frames - a_start, b.format.frames - b_start)
     same_channels = a.format.channels == b.format.channels
-    ratio, alive = _window_ratios(Path(a.path), Path(b.path), a_start, b_start, frames, sr, same_channels)
+    ratio, residual, alive = _window_ratios(
+        Path(a.path), Path(b.path), a_start, b_start, frames, sr, same_channels
+    )
     hop_s = float(params["hop_s"])
-    marked = (ratio > float(params["threshold_db"])) & alive
+    marked = (
+        (ratio > float(params["threshold_db"])) & (residual > float(params["residual_floor_dbfs"])) & alive
+    )
     raw_regions = _merge_regions(
         marked, sr, hop_s, float(params["merge_gap_s"]), ratio, offset_s=a_start / sr
     )

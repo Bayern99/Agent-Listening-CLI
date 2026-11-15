@@ -1063,3 +1063,66 @@ def check(evidence_path: str, audio_paths: Sequence[str]) -> tuple[dict[str, Any
         {"schema": "agent-listening/check", "version": 1, "status": status, "inputs": rows},
         0 if status == "verified" else 1,
     )
+
+
+def recheck_claims(
+    evidence_dict: Mapping[str, Any], audio_paths: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Re-run deterministic checks on a recorded compare or review-with-before document.
+
+    Re-identifies the recorded inputs from their paths (or positional
+    overrides), verifying sha256 equality, recomputes pcm-identity and
+    signal-difference with current code, strips the old deterministic checks
+    from each claim and re-derives statuses. Tolerates documents written
+    before request.follow_up and producer.attempts existed.
+    """
+    raw = dict(evidence_dict)
+    request = raw.get("request")
+    if isinstance(request, Mapping):
+        raw["request"] = {"follow_up": 0, **request}
+    producer = raw.get("producer")
+    if isinstance(producer, Mapping):
+        raw["producer"] = {"attempts": 1, **producer}
+    ev = evidence.from_json(raw)
+    comparable = (ev.task in ("compare", "review") and len(ev.inputs) == 2) and any(
+        inp.role == "before" for inp in ev.inputs
+    )
+    if not comparable:
+        raise UsageError("recheck_claims requires compare or review-with-before evidence")
+    paths = list(audio_paths) if audio_paths is not None else [inp.path for inp in ev.inputs]
+    if len(paths) != len(ev.inputs):
+        raise UsageError("audio_paths must match the recorded inputs")
+    fresh = _identify_inputs(
+        [(path, inp.label, inp.role) for path, inp in zip(paths, ev.inputs, strict=True)]
+    )
+    for inp, new in zip(ev.inputs, fresh, strict=True):
+        if new.sha256 != inp.sha256:
+            raise audio.IdentityError(f"input {inp.label} sha256 changed since the evidence was recorded")
+    measurements: list[Measurement] = [audio.pcm_identity(fresh[0], fresh[1])]
+    identical = bool(measurements[0].result["identical"])
+    if not identical:
+        measurements.append(audio.signal_difference(fresh[0], fresh[1]))
+    regions, global_change, spectral_regions, spectral_global = _difference_regions(
+        measurements[1] if len(measurements) > 1 else None
+    )
+    numbered = _renumber(measurements)
+
+    def strip(claim: evidence.Claim) -> evidence.Claim:
+        checks = tuple(c for c in claim.checks if c.name not in evidence.DETERMINISTIC_CHECKS)
+        return replace(claim, checks=checks, status=evidence.derive_status(claim.loci, checks))
+
+    claims = evidence.apply_identity_check(
+        tuple(strip(c) for c in ev.claims),
+        identical=identical,
+        measurement_id=numbered[0].id,
+    )
+    if len(numbered) > 1:
+        claims = evidence.apply_difference_check(
+            claims,
+            regions=regions,
+            global_change=global_change,
+            measurement_id=numbered[1].id,
+            spectral_regions=spectral_regions,
+            spectral_global=spectral_global,
+        )
+    return evidence.to_json(replace(ev, measurements=numbered, claims=claims))
