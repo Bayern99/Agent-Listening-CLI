@@ -89,17 +89,24 @@ class Model:
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
             device_map=device,
-            attn_implementation="eager",
+            attn_implementation="sdpa",
         ).eval()
+        if device == "cpu":
+            self.model.to(torch.float32)
+        self.model.language_model.set_attn_implementation("sdpa")
+        if self.model.language_model.config._attn_implementation != "sdpa":
+            raise ValueError("nested language model must use SDPA for prefill")
         self.processor = MossMusicProcessor.from_pretrained(str(weights), enable_time_marker=True)
         self.load_s = time.monotonic() - started
 
     def call(self, path: Path, built: prompts.ListeningPrompt, inputs: list, windows: dict) -> dict:
         if path.exists():
             return json.loads(path.read_text())
+        started = time.monotonic()
         import torchaudio
 
         torch = self.torch
+        self.model.language_model.set_attn_implementation("sdpa")
         if self.device == "mps":
             torch.mps.synchronize()
             torch.mps.empty_cache()
@@ -108,11 +115,11 @@ class Model:
             "model_revision": MODEL_REVISION,
             "source_revision": SOURCE_REVISION,
             "device": self.device,
-            "dtype": "bfloat16",
+            "dtype": str(self.model.dtype).removeprefix("torch."),
             "encoder_conv_chunksize": self.model.audio_encoder.conv_chunksize,
             "attention": {
-                "requested": "eager",
-                "language": self.model.language_model.config._attn_implementation,
+                "language_prefill": self.model.language_model.config._attn_implementation,
+                "language_cached_decode": "eager" if self.device == "mps" else "sdpa",
                 "encoder": self.model.config.audio_config._attn_implementation,
             },
             "generation": GENERATION,
@@ -125,7 +132,6 @@ class Model:
             "inputs": [],
             "status": "failed",
         }
-        started = time.monotonic()
         stop = threading.Event()
         peaks = {
             "mps_driver_bytes_sampled": 0,
@@ -144,6 +150,13 @@ class Model:
                         peaks["mps_driver_bytes_sampled"], torch.mps.driver_allocated_memory()
                     )
                 stop.wait(0.1)
+
+        def checked_logits(input_ids, scores):
+            finite_logits(input_ids, scores)
+            # On the pinned MPS runtime, cached SDPA produced nonfinite logits.
+            if self.device == "mps" and self.model.language_model.config._attn_implementation != "eager":
+                self.model.language_model.set_attn_implementation("eager")
+            return scores
 
         monitor = threading.Thread(target=sample, daemon=True)
         monitor.start()
@@ -181,9 +194,10 @@ class Model:
             encoded["audio_data"] = encoded["audio_data"].to(self.model.dtype)
             encoded["audio_input_mask"] = encoded["input_ids"] == self.processor.audio_token_id
             with torch.inference_mode():
-                ids = self.model.generate(**encoded, **GENERATION, logits_processor=[finite_logits])
+                ids = self.model.generate(**encoded, **GENERATION, logits_processor=[checked_logits])
             if self.device == "mps":
                 torch.mps.synchronize()
+            record["language_backend_after_generate"] = self.model.language_model.config._attn_implementation
             output = ids[0, record["input_tokens"] :]
             record["output_tokens"] = len(output)
             record["raw_response"] = self.processor.decode(output, skip_special_tokens=True)
@@ -192,6 +206,8 @@ class Model:
         except Exception:
             record["error"] = traceback.format_exc()
         finally:
+            self.model.language_model.set_attn_implementation("sdpa")
+            record["language_backend_restored"] = self.model.language_model.config._attn_implementation
             stop.set()
             monitor.join()
             record["wall_s"] = round(time.monotonic() - started, 3)

@@ -6,8 +6,8 @@ This evaluation asks whether MOSS-Music supplies independently checked musical l
 the stored `gemini-4-hydrogen` holdout. The decision set is the existing holdout, including MUSE
 (`AGENT_LISTENING_EVAL_PAID_TIER=1` enables those existing cases; inference here is local).
 Development uses only pilot cases. The initial method commit preceded the first MOSS holdout attempt. That SDPA attempt was terminated
-when numerical invalidity was demonstrated. The revised method is committed before the valid decision
-run; the invalid attempt is retained and excluded from capability conclusions.
+when numerical invalidity was demonstrated; a second start exposed a nested-backend configuration
+error. Both are excluded. The final method is committed before the valid decision run; the invalid attempt is retained and excluded from capability conclusions.
 No product dependency, contract, threshold, CLI behaviour or SC Agent IDE code changes.
 
 The runner resolves `corpus.py` recipes against `build-manifest.json`, checks the original file hashes,
@@ -45,7 +45,8 @@ for concise JSON only. Parsing accepts plain JSON or a single `json` code fence,
 and otherwise records failure. A logits processor also rejects every generation step with any NaN
 or infinity, before argmax can turn invalid scores into repeated tokens. There are no retries,
 output repairs or answer extraction from prose.
-Greedy decoding uses BF16 and eager attention in both encoder and language model, `do_sample=False`, `num_beams=1`, `max_new_tokens=2048`, `use_cache=True`,
+Greedy decoding on MPS uses BF16, SDPA language prefill and eager cached language decoding
+(the encoder retains eager attention), `do_sample=False`, `num_beams=1`, `max_new_tokens=2048`, `use_cache=True`,
 and seed 0. The encoder retains its upstream batch size of 64 four-second chunks and default MPS allocation
 limits. Unused MPS cache is cleared before each call. This removes sampling randomness; cross-device bitwise determinism is not asserted.
 
@@ -108,16 +109,36 @@ macOS sampling recorded a peak physical footprint of 108.8G and a thread waiting
 The final method restores the already successful upstream defaults and clears unused cache between
 calls. These bounded memory experiments are retained as deployment evidence, not holdout results.
 
-Machine: Apple M4 Max, arm64, 128 GB unified memory. MPS is available. A patch-free BF16 + SDPA dual
-audio smoke call loaded in 7.10 s and completed in 15.68 s including load. This probe is feasibility
-evidence, not a scored listening case. There is no HF_TOKEN environment value or saved HF token;
-HF Jobs was not used. External service charge is zero; electricity and hardware amortisation are
-unmeasured. MPS SDPA later proved numerically invalid on a longer pair. Eager attention passed the same
-four-step diagnostic and a complete 418.5 s pilot input (117 generated tokens, every step finite,
-42.15 s). Its sampled peak was 127.21 GB MPS driver allocation, 26.48 GB live tensor allocation and
-2.44 GB process RSS high-water. Driver allocation includes caches and must not be summed with RSS
-as physical usage. The first smoke test was insufficient because it did not check cached-step
-logits. CPU fallback is unnecessary if this eager path remains valid.
+Machine: Apple M4 Max, arm64, 128 GB unified memory. MPS is available. The initial smoke test
+verified text generation but did not check cached-step logits. On a longer pair, a separate diagnostic
+found all 151,936 next-token logits nonfinite at generation step 1 under BF16 MPS SDPA. The invalid
+outputs can degenerate into repeated `!`; they cannot be scored as listening ability.
+
+Setting only the outer `from_pretrained(attn_implementation=...)` argument does not reliably configure
+the nested Qwen model in this wrapper. The runner explicitly sets and checks `model.language_model`.
+Fully eager MPS passed short pilot calls and a 418.452 s single input (155.44 s wall time), but reached
+190.45 GB sampled driver allocation and crashed with SIGSEGV before producing logits on two such
+inputs (12,567 tokens). The bounded CPU fallback used FP32 + SDPA and completed that full structured
+comparison in 316.45 s, 680 finite generation steps, peak RSS 53.96 GB. These are feasibility probes,
+not holdout capability observations.
+
+The final MPS policy uses SDPA for prefill and switches the nested language model to eager immediately
+after checking the first finite logits. Cached decode then uses eager. The standard Qwen3 cache holds
+ordinary RoPE-transformed K/V tensors, independent of attention backend; both implementations use
+the same attention scaling, grouping and causal access. Transformers 4.57.1 supports the public setter
+and rereads the implementation on each forward. Numerical results need not be bitwise identical.
+The runner resets SDPA before every request and restores it in `finally`; calls are sequential.
+No upstream source or weights are patched. This policy passed the 12,567-token pilot-source pair:
+prefill SDPA and all three cached eager steps were finite, 43.67 s including load, sampled driver peak
+85.09 GB and tensor peak 42.48 GB. The final policy also completed all three pilot calls (short comparison, focused comparison and
+418.452 s choice input), with finite logits and valid JSON: 51.8 s, 14.4 s and 47.7 s respectively.
+These checks preceded the final method commit.
+
+CPU mode loads the same BF16 checkpoint, converts to FP32, and uses SDPA throughout. Memory figures
+use decimal GB. Driver allocation includes caches/in-flight allocations; it must not be summed with
+RSS or presented as an exact physical footprint. Sampling is every 0.1 s; RSS is process high-water.
+There is no HF_TOKEN environment value or saved token, so HF Jobs was not used. External service
+charge is zero; electricity and hardware amortisation are unmeasured. SGLang/CUDA remains untested.
 
 `hf download OpenMOSS-Team/MOSS-Music-8B-Instruct` resolved the existing cache. All 24 files passed
 remote size and available digest checks (LFS SHA256; Git blob SHA1 for other files), totalling
@@ -137,9 +158,9 @@ uv pip install --python "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
   -r eval/moss-requirements.txt
 hf download OpenMOSS-Team/MOSS-Music-8B-Instruct --revision fce7f8304e96cc2d3398b8106456cbb2ecec3139
 AGENT_LISTENING_EVAL_PAID_TIER=1 "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
-  eval/moss.py --split holdout --run moss-holdout-2
-AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/score.py --run moss-holdout-2 --split holdout
-AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/moss_score.py --run moss-holdout-2
+  eval/moss.py --split holdout --run moss-holdout-3
+AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/score.py --run moss-holdout-3 --split holdout
+AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/moss_score.py --run moss-holdout-3
 uv run --with scipy python -m pytest -q eval/test_moss.py
 ```
 
@@ -156,5 +177,9 @@ accuracy was 2/4. The near-null and identical-model controls returned no differe
 same AB prompt in the counterbalance call produced exactly the same text. Prompt and scoring
 thresholds were not changed after these observations. The original `runs/moss-holdout-1` attempt produced nonfinite logits (151,936/151,936
 at generation step 1) and is invalid for capability comparisons; see `runs/moss-feasibility/logits-mps.json`.
-The eager diagnostic is `logits-mps-eager.json`; revised pilot output is in `runs/moss-pilot-4-eager`.
+The eager diagnostic is `logits-mps-eager.json`. The second start (`moss-holdout-2`) also used SDPA
+inside Qwen despite the outer eager flag; it was rejected by the finite-logits guard and excluded.
+Actual eager pilot output is `runs/moss-pilot-5-explicit-eager`; the final phase-switching policy is
+checked in `runs/moss-pilot-6-hybrid`. The long-pair probes are `long-pair-mps.json` (native crash),
+`long-pair-cpu.json` (complete FP32 fallback) and `long-pair-mps-hybrid.json` (finite phase switch).
 The held-out decision results follow below after the revised method commit.
