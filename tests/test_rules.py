@@ -308,3 +308,13 @@ def test_cli_import_loads_no_heavy_modules():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=SRC.parent)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_listening_prompt_cannot_receive_goals():
+    """Goal-blind by API: prompts.build has no way to accept a brief."""
+    import inspect
+
+    from agent_listening import prompts
+
+    assert "brief" not in inspect.signature(prompts.build).parameters
+    assert "brief" not in inspect.signature(prompts._task_text).parameters

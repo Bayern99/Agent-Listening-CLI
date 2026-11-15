@@ -184,39 +184,180 @@ def test_investigate_with_measure(tmp_path):
     assert ev["request"]["focus"] == {"start": 0.2, "end": 1.2}
 
 
+def _review_pass1(**claim_over):
+    claim = {
+        "text": "quiet sine",
+        "aspect": "dynamics",
+        "scale": "work",
+        "loci": [],
+        "relation": "none",
+        "basis": "audio",
+        "confidence": "high",
+    }
+    claim.update(claim_over)
+    return {"summary": "listening summary", "claims": [claim]}
+
+
+def _review_pass2(items, summary="assessment summary"):
+    return {"summary": summary, "assessments": items}
+
+
 def test_review_assessments(tmp_path):
     wav = _sine(tmp_path / "a.wav")
     brief = tmp_path / "brief.json"
     brief.write_text(json.dumps({"goals": ["keep it quiet"], "protect": [{"text": "bass stays"}]}))
-    payload = {
-        "summary": "s",
-        "claims": [
-            {
-                "text": "quiet sine",
-                "aspect": "dynamics",
-                "scale": "work",
-                "loci": [],
-                "relation": "none",
-                "basis": "audio",
-                "confidence": "high",
-            }
-        ],
-        "assessments": [
+    pass2 = _review_pass2(
+        [
             {"target": "g1", "verdict": "met", "claims": [0], "note": "quiet throughout"},
             {"target": "p1", "verdict": "unclear", "claims": [7], "note": "n/a"},
-        ],
-    }
-    env, _ = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, payload))
+        ]
+    )
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [_review_pass1(), pass2]))
     proc = _run(["review", str(wav), "--brief", str(brief)], env)
     assert proc.returncode == 0, proc.stderr
     ev = json.loads(proc.stdout)
     assert ev["task"] == "review"
     assert ev["brief"]["goals"][0]["id"] == "g1"
+    assert ev["summary"] == "assessment summary"
+    assert "GOAL_BLIND_LISTENING" in ev["limitations"]
+    assert ev["producer"]["attempts"] == 2
+    assert len(ev["producer"]["interaction_ids"]) == 2
     by_target = {a["target"]: a for a in ev["assessments"]}
     assert by_target["g1"]["verdict"] == "met"
     assert by_target["g1"]["claims"] == ["c0"]
     assert by_target["p1"]["verdict"] == "unclear"
     assert by_target["p1"]["claims"] == []
+
+
+def test_review_pass1_is_goal_blind(tmp_path):
+    wav = _sine(tmp_path / "a.wav")
+    brief = tmp_path / "brief.json"
+    brief.write_text(
+        json.dumps({"goals": ["GOALTEXTXYZ audible bells"], "protect": [{"text": "PROTECTXYZ bass stays"}]})
+    )
+    pass2 = _review_pass2(
+        [
+            {"target": "g1", "verdict": "met", "claims": [0], "note": "n"},
+            {"target": "p1", "verdict": "met", "claims": [0], "note": "n"},
+        ]
+    )
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [_review_pass1(), pass2]))
+    proc = _run(["review", str(wav), "--brief", str(brief)], env)
+    assert proc.returncode == 0, proc.stderr
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 2
+    first, second = gens[0]["argv"], gens[1]["argv"]
+    assert "-i" in first  # listening pass gets the audio
+    assert "GOALTEXTXYZ" not in first[1] and "PROTECTXYZ" not in first[1]
+    assert "-i" not in second  # assessment pass is text-only
+    assert "GOALTEXTXYZ" in second[1] and "PROTECTXYZ" in second[1]
+    assert "quiet sine" in second[1]  # pass-1 claims listed for assessment
+
+
+def test_review_before_is_compare_with_before_first(tmp_path):
+    before_wav = _sine(tmp_path / "before.wav", freq=330.0)
+    wav = _sine(tmp_path / "a.wav", freq=550.0)
+    brief = tmp_path / "brief.json"
+    brief.write_text(json.dumps({"goals": ["keep it quiet"]}))
+    pass1 = {
+        "summary": "s",
+        "claims": [
+            {
+                "text": "the lead got brighter",
+                "aspect": "timbre",
+                "scale": "work",
+                "loci": [{"clip": "B", "start": 0.0, "end": 1.0}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            }
+        ],
+    }
+    pass2 = _review_pass2([{"target": "g1", "verdict": "met", "claims": [0], "note": "n"}])
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [pass1, pass2]))
+    proc = _run(["review", str(wav), "--brief", str(brief), "--before", str(before_wav)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    roles = {i["label"]: i["role"] for i in ev["inputs"]}
+    assert roles == {"A": "before", "B": "subject"}
+    assert any(m["kind"] == "signal-difference" for m in ev["measurements"])
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    first_inputs = [gens[0]["argv"][i + 1] for i, v in enumerate(gens[0]["argv"]) if v == "-i"]
+    assert first_inputs == [ev["transport"][0]["path"], ev["transport"][1]["path"]]
+    assert "Clip A is the earlier" in gens[0]["argv"][1]
+
+
+def test_review_contradicted_claims_not_assessed(tmp_path):
+    before_wav, wav = _compare_pair(tmp_path, [(0.3, 0.6, 3.0)])
+    brief = tmp_path / "brief.json"
+    brief.write_text(json.dumps({"goals": ["keep it quiet"]}))
+    pass1 = {
+        "summary": "s",
+        "claims": [
+            {
+                "text": "imaginary drums at 4.5s",
+                "aspect": "rhythm",
+                "scale": "event",
+                "loci": [{"clip": "B", "start": 4.0, "end": 5.0}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            },
+            {
+                "text": "the lead got brighter",
+                "aspect": "timbre",
+                "scale": "event",
+                "loci": [{"clip": "B", "start": 0.3, "end": 0.9}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            },
+        ],
+    }
+    pass2 = _review_pass2([{"target": "g1", "verdict": "met", "claims": [0], "note": "n"}])
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [pass1, pass2]))
+    proc = _run(["review", str(wav), "--brief", str(brief), "--before", str(before_wav)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    assert ev["claims"][0]["status"] == "contradicted"
+    second_prompt = [e["argv"][1] for e in read_log(log) if e["argv"][:1] == ["generate"]][1]
+    assert "imaginary drums at 4.5s" not in second_prompt
+    assert "the lead got brighter" in second_prompt
+    # index 0 in the assessment prompt is the surviving claim, not the contradicted c0
+    assert ev["assessments"][0]["claims"] == ["c1"]
+
+
+def test_review_missing_target_and_invalid_index(tmp_path):
+    wav = _sine(tmp_path / "a.wav")
+    brief = tmp_path / "brief.json"
+    brief.write_text(json.dumps({"goals": ["keep it quiet"], "protect": [{"text": "bass stays"}]}))
+    pass2 = _review_pass2([{"target": "g1", "verdict": "met", "claims": [9], "note": "n"}])
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [_review_pass1(), pass2]))
+    proc = _run(["review", str(wav), "--brief", str(brief)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    by_target = {a["target"]: a for a in ev["assessments"]}
+    assert by_target["p1"]["verdict"] == "unclear"
+    assert by_target["p1"]["note"] == "no assessment returned"
+    assert by_target["g1"]["claims"] == []
+    assert any(lim.startswith("MODEL_OUTPUT_ADJUSTED") and "index" in lim for lim in ev["limitations"])
+
+
+def test_review_pass2_failure_keeps_measurements(tmp_path):
+    before_wav = _sine(tmp_path / "before.wav", freq=330.0)
+    wav = _sine(tmp_path / "a.wav", freq=550.0)
+    brief = tmp_path / "brief.json"
+    brief.write_text(json.dumps({"goals": ["keep it quiet"]}))
+    env, _ = _env(
+        tmp_path,
+        FAKE_GEMINI_FAIL_SEQUENCE="ok,server_error,server_error,server_error",
+        FAKE_GEMINI_FAIL_MESSAGE="High demand. Please retry in 0s.",
+    )
+    proc = _run(["review", str(wav), "--brief", str(brief), "--before", str(before_wav)], env)
+    assert proc.returncode == 3
+    ev = json.loads(proc.stdout)
+    assert ev["status"] == "failed"
+    assert any(m["kind"] == "signal-difference" for m in ev["measurements"])
 
 
 def test_review_empty_brief_is_usage_error(tmp_path):

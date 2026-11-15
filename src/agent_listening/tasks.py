@@ -45,6 +45,7 @@ LIM_CONTEXT = "CONTEXT_SUPPLIED"
 LIM_DIFF_UNAVAILABLE = "DIFFERENCE_CHECK_UNAVAILABLE"
 LIM_DRY_RUN = "DRY_RUN_NO_MODEL_CALL"
 LIM_FOLLOW_UP = "MEASUREMENT_GUIDED_FOLLOW_UP"
+LIM_GOAL_BLIND = "GOAL_BLIND_LISTENING"
 
 
 class UsageError(Exception):
@@ -139,9 +140,23 @@ def _limitations(
 
 
 def _producer(
-    opts: Options, replies: Sequence[gemini.Reply], system: str, prompt: str, schema: Mapping[str, object]
+    opts: Options,
+    replies: Sequence[gemini.Reply],
+    system: str,
+    prompt: str,
+    schema: Mapping[str, object],
+    extra_instructions: Sequence[tuple[str, str, Mapping[str, object]]] = (),
 ) -> Producer:
     instructions = system + "\n" + prompt + "\n" + json.dumps(schema, sort_keys=True, ensure_ascii=False)
+    for extra_system, extra_prompt, extra_schema in extra_instructions:
+        instructions += (
+            "\n"
+            + extra_system
+            + "\n"
+            + extra_prompt
+            + "\n"
+            + json.dumps(extra_schema, sort_keys=True, ensure_ascii=False)
+        )
     usage = {
         key: sum(r.usage.get(key, 0) for r in replies)
         for key in ("input_tokens", "audio_tokens", "output_tokens", "thought_tokens")
@@ -342,10 +357,6 @@ def _run_single(
     built: prompts.ListeningPrompt,
     options: Options,
     post: Callable[[tuple[evidence.Claim, ...]], tuple[evidence.Claim, ...]] | None,
-    assess: Callable[
-        [Mapping[str, object], tuple[evidence.Claim, ...]], tuple[tuple[Assessment, ...], tuple[str, ...]]
-    ]
-    | None = None,
     follow_up: Callable[
         [tuple[evidence.Claim, ...]],
         tuple[
@@ -377,7 +388,6 @@ def _run_single(
             3,
         )
     claims: tuple[evidence.Claim, ...] = ()
-    assessments: tuple[Assessment, ...] = ()
     problems: tuple[str, ...] = ()
     summary = ""
     answer = None
@@ -389,9 +399,6 @@ def _run_single(
         claims, problems = evidence.claims_from_model(reply.payload, clips)
         if post is not None:
             claims = post(claims)
-        if assess is not None:
-            assessments, assess_problems = assess(reply.payload, claims)
-            problems = (*problems, *assess_problems)
         extra_limitations.extend(_problems_limitations(problems))
         replies = [reply]
         if follow_up is not None:
@@ -420,7 +427,6 @@ def _run_single(
             transports=transports,
             measurements=measurements,
             claims=claims,
-            assessments=assessments,
             answer=answer,
             summary=summary,
             producer=producer,
@@ -809,6 +815,55 @@ def _parse_brief(brief_path: str) -> tuple[Brief, prompts.BriefView]:
     return brief, view
 
 
+def _assessments_from_model(
+    payload: Mapping[str, object],
+    brief: Brief,
+    assessable: Sequence[evidence.Claim],
+) -> tuple[tuple[Assessment, ...], tuple[str, ...]]:
+    """Map pass-2 assessment items to claim ids; indices address `assessable`."""
+    problems: list[str] = []
+    targets = [g.id for g in brief.goals] + [p.id for p in brief.protect]
+    done: dict[str, Assessment] = {}
+    raw_items = payload.get("assessments")
+    if not isinstance(raw_items, list):
+        problems.append("assessments missing or not a list")
+        raw_items = []
+    for ai, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            problems.append(f"assessment {ai} is not an object")
+            continue
+        target = item.get("target")
+        if target not in targets:
+            problems.append(f"assessment {ai} names unknown target {target!r}")
+            continue
+        verdict = item.get("verdict")
+        if verdict not in evidence.VERDICTS:
+            problems.append(f"assessment {ai}: unknown verdict {verdict!r} mapped to 'unclear'")
+            verdict = "unclear"
+        cited: list[str] = []
+        raw_indices = item.get("claims")
+        if not isinstance(raw_indices, list):
+            problems.append(f"assessment {ai}: claims is not a list")
+            raw_indices = []
+        for raw_index in raw_indices:
+            if not isinstance(raw_index, int) or not 0 <= raw_index < len(assessable):
+                problems.append(f"assessment {ai}: invalid claim index {raw_index!r}")
+                continue
+            cited.append(assessable[raw_index].id)
+        done[str(target)] = Assessment(
+            target=str(target),
+            verdict=str(verdict),
+            claims=tuple(cited),
+            note=str(item.get("note") or ""),
+        )
+    for target in targets:
+        if target not in done:
+            done[target] = Assessment(
+                target=target, verdict="unclear", claims=(), note="no assessment returned"
+            )
+    return tuple(done[t] for t in targets), tuple(problems)
+
+
 def review(
     audio_path: str,
     *,
@@ -817,10 +872,16 @@ def review(
     contexts: Sequence[str],
     options: Options,
 ) -> tuple[Evidence, int]:
+    """Goal-blind two-pass review: neutral listening first, text-only assessment second.
+
+    Pass 1 hears without the brief (hear, or compare when --before is given;
+    labels then follow compare convention: A = before, B = subject). Pass 2
+    reads the non-contradicted claims as text and assesses the brief."""
     brief, brief_view = _parse_brief(brief_path)
-    specs = [(audio_path, "A", "subject")]
     if before is not None:
-        specs.append((before, "B", "before"))
+        specs = [(before, "A", "before"), (audio_path, "B", "subject")]
+    else:
+        specs = [(audio_path, "A", "subject")]
     inputs = _identify_inputs(specs)
     ctx_files, ctx_views = _contexts(contexts)
     measurements: list[Measurement] = []
@@ -829,7 +890,7 @@ def review(
     spectral_regions: Mapping[str, Sequence[tuple[float, float]]] | None = None
     spectral_global = False
     identical = False
-    extra: list[str] = []
+    extra: list[str] = [LIM_GOAL_BLIND]
     if before is not None:
         identity = audio.pcm_identity(inputs[0], inputs[1])
         measurements.append(identity)
@@ -845,90 +906,100 @@ def review(
     transports = _transports(inputs, options, {})
     clips = {inp.label: _clip_info(inp, tr) for inp, tr in zip(inputs, transports, strict=True)}
     built = prompts.build(
-        "review",
+        "compare" if before is not None else "hear",
         [_clip_view(inp, tr) for inp, tr in zip(inputs, transports, strict=True)],
         contexts=ctx_views,
-        brief=brief_view,
     )
-    request = Request(question=None, focus=None, measures=(), counterbalance=False)
+    request = Request(question=None, focus=None, measures=(), counterbalance=False, follow_up=0)
 
-    def post(claims: tuple[evidence.Claim, ...]) -> tuple[evidence.Claim, ...]:
-        if before is None:
-            return claims
-        numbered = _renumber(measurements)
-        out = evidence.apply_identity_check(claims, identical=identical, measurement_id=numbered[0].id)
-        if len(numbered) > 1:
-            out = evidence.apply_difference_check(
-                out,
-                regions=regions,
-                global_change=global_change,
-                measurement_id=numbered[1].id,
-                spectral_regions=spectral_regions,
-                spectral_global=spectral_global,
-            )
-        return out
+    def failed(exc: gemini.ProviderError) -> tuple[Evidence, int]:
+        return (
+            _failed_evidence(
+                task="review",
+                inputs=inputs,
+                contexts=ctx_files,
+                brief=brief,
+                request=request,
+                transports=transports,
+                measurements=_renumber(measurements),
+                error=exc,
+                limitations=_limitations(transports, ctx_files, inputs, False, extra),
+            ),
+            3,
+        )
 
-    def assess(
-        payload: Mapping[str, object], claims: tuple[evidence.Claim, ...]
-    ) -> tuple[tuple[Assessment, ...], tuple[str, ...]]:
-        problems: list[str] = []
-        claim_ids = {c.id for c in claims}
-        targets = [g.id for g in brief.goals] + [p.id for p in brief.protect]
-        done: dict[str, Assessment] = {}
-        raw_items = payload.get("assessments")
-        if not isinstance(raw_items, list):
-            problems.append("assessments missing or not a list")
-            raw_items = []
-        for ai, item in enumerate(raw_items):
-            if not isinstance(item, dict):
-                problems.append(f"assessment {ai} is not an object")
-                continue
-            target = item.get("target")
-            if target not in targets:
-                problems.append(f"assessment {ai} names unknown target {target!r}")
-                continue
-            verdict = item.get("verdict")
-            if verdict not in evidence.VERDICTS:
-                problems.append(f"assessment {ai}: unknown verdict {verdict!r} mapped to 'unclear'")
-                verdict = "unclear"
-            cited: list[str] = []
-            raw_indices = item.get("claims")
-            if not isinstance(raw_indices, list):
-                problems.append(f"assessment {ai}: claims is not a list")
-                raw_indices = []
-            for raw_index in raw_indices:
-                cid = f"c{raw_index}" if isinstance(raw_index, int) else None
-                if cid is None or cid not in claim_ids:
-                    problems.append(f"assessment {ai}: invalid claim index {raw_index!r}")
-                    continue
-                cited.append(cid)
-            done[str(target)] = Assessment(
-                target=str(target),
-                verdict=str(verdict),
-                claims=tuple(cited),
-                note=str(item.get("note") or ""),
-            )
-        for target in targets:
-            if target not in done:
-                done[target] = Assessment(
-                    target=target, verdict="unclear", claims=(), note="no assessment returned"
+    try:
+        reply = _listen_or_dry(options, built, transports)
+    except gemini.ProviderError as exc:
+        return failed(exc)
+    claims: tuple[evidence.Claim, ...] = ()
+    assessments: tuple[Assessment, ...] = ()
+    summary = ""
+    producer = None
+    if reply is None:
+        extra.append(LIM_DRY_RUN)
+        status = "partial"
+    else:
+        claims, problems = evidence.claims_from_model(reply.payload, clips)
+        if before is not None:
+            numbered = _renumber(measurements)
+            claims = evidence.apply_identity_check(claims, identical=identical, measurement_id=numbered[0].id)
+            if len(numbered) > 1:
+                claims = evidence.apply_difference_check(
+                    claims,
+                    regions=regions,
+                    global_change=global_change,
+                    measurement_id=numbered[1].id,
+                    spectral_regions=spectral_regions,
+                    spectral_global=spectral_global,
                 )
-        return tuple(done[t] for t in targets), tuple(problems)
-
-    return _run_single(
-        task="review",
-        inputs=inputs,
-        contexts=ctx_files,
-        brief=brief,
-        request=request,
-        transports=transports,
-        measurements=measurements,
-        clips=clips,
-        built=built,
-        options=options,
-        post=post,
-        assess=assess,
-        base_limitations=extra,
+        assessable = [c for c in claims if c.status != "contradicted"]
+        lines = [
+            (
+                i,
+                f"{c.aspect}, {c.scale}, "
+                + (f"{c.loci[0].start:.1f}-{c.loci[0].end:.1f} s" if c.loci else "no locus")
+                + f", {c.confidence}: {c.text}",
+            )
+            for i, c in enumerate(assessable)
+        ]
+        built2 = prompts.build_assessment(brief_view, lines)
+        try:
+            reply2 = _listen_or_dry(options, built2, ())
+        except gemini.ProviderError as exc:
+            return failed(exc)
+        assert reply2 is not None
+        assessments, assess_problems = _assessments_from_model(reply2.payload, brief, assessable)
+        problems = (*problems, *assess_problems)
+        extra.extend(_problems_limitations(problems))
+        summary = str(reply2.payload.get("summary") or "")
+        producer = _producer(
+            options,
+            [reply, reply2],
+            built.system,
+            built.prompt,
+            built.schema,
+            extra_instructions=[(built2.system, built2.prompt, built2.schema)],
+        )
+        status = "complete"
+    limitations = _limitations(transports, ctx_files, inputs, reply is not None, extra)
+    return (
+        _evidence(
+            task="review",
+            status=status,
+            request=request,
+            inputs=inputs,
+            contexts=ctx_files,
+            brief=brief,
+            transports=transports,
+            measurements=measurements,
+            claims=claims,
+            assessments=assessments,
+            summary=summary,
+            producer=producer,
+            limitations=limitations,
+        ),
+        0,
     )
 
 

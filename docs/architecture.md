@@ -156,6 +156,13 @@ is phase-sensitive, so a re-rendered oscillator with a new start phase "differs"
 grid). "unchanged" claims are contradicted by spectral regions, including global ones; "differs" claims are
 supported by waveform or spectral regions and become inapplicable only when both are global.
 
+Goal-blind review (added after the revision pilot's negative control): when the goals were in the
+listening prompt, Hydrogen reported every goal as violated on both the defective and the corrected renders
+(5/5 defects flagged, 5/5 corrected renders falsely flagged; for example "a clear whistling resonance" on a
+render with the resonance removed). `review` therefore listens first without seeing the brief (`hear`, or
+`compare` with `--before`), applies the deterministic checks, and then asks a text-only assessment call to
+judge each goal from the non-contradicted claims only, answering `unclear` when no claim addresses a goal.
+
 Measurement-guided follow-up (added after the pilot, where whole-clip comparison missed audible
 articulation and resonance edits and answered "no perceptible difference"): measured difference regions that
 no `consistent` difference claim covers are re-heard as matching A/B excerpts with the region pointed out

@@ -95,7 +95,6 @@ def _task_text(
     task: str,
     clips: Sequence[ClipView],
     question: str | None,
-    brief: BriefView | None,
     measurements: Mapping[str, object] | None,
     region: tuple[float, float] | None = None,
 ) -> str:
@@ -145,28 +144,26 @@ def _task_text(
             "Use the measurements only to direct your attention. Report what you hear, and say so when a "
             "measurement and your hearing disagree."
         )
-    if task == "review":
-        if brief is None:
-            raise ValueError("review needs a brief")
-        before = (
-            " Clip B is the previous render; use it to judge what the revision changed."
-            if len(clips) > 1
-            else ""
-        )
-        goals = "\n".join(f"- {gid}: {text}" for gid, text in brief.goals) or "- (none)"
-        protect = "\n".join(f"- {pid}: {text}" for pid, text in brief.protect) or "- (none)"
-        return (
-            f"Clip A is the current render of a composition.{before} Assess clip A against the human "
-            "artistic goals and the protected musical relationships below. Give one assessment for every "
-            "goal and protected relationship, with verdict met, partly, not-met or unclear, citing the "
-            "indices (0-based) of the claims that support it. Then add the most useful time-specific "
-            "revision observations as claims: what to change, where, described in sound.\n"
-            f"Goals:\n{goals}\nProtected relationships:\n{protect}"
-        )
     raise ValueError(f"unknown listening task: {task}")
 
 
-def _schema(task: str, labels: Sequence[str], targets: Sequence[str]) -> dict[str, object]:
+def _assessments_schema(targets: Sequence[str]) -> dict[str, object]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "enum": list(targets)},
+                "verdict": {"type": "string", "enum": list(VERDICTS)},
+                "claims": {"type": "array", "items": {"type": "integer"}},
+                "note": {"type": "string"},
+            },
+            "required": ["target", "verdict", "claims", "note"],
+        },
+    }
+
+
+def _schema(task: str, labels: Sequence[str]) -> dict[str, object]:
     locus = {
         "type": "object",
         "properties": {
@@ -198,21 +195,6 @@ def _schema(task: str, labels: Sequence[str], targets: Sequence[str]) -> dict[st
     if task in ("ask", "investigate"):
         properties["answer"] = {"type": "string"}
         required.append("answer")
-    if task == "review":
-        properties["assessments"] = {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "string", "enum": list(targets)},
-                    "verdict": {"type": "string", "enum": list(VERDICTS)},
-                    "claims": {"type": "array", "items": {"type": "integer"}},
-                    "note": {"type": "string"},
-                },
-                "required": ["target", "verdict", "claims", "note"],
-            },
-        }
-        required.append("assessments")
     return {"type": "object", "properties": properties, "required": required}
 
 
@@ -222,7 +204,6 @@ def build(
     *,
     question: str | None = None,
     contexts: Sequence[ContextView] = (),
-    brief: BriefView | None = None,
     measurements: Mapping[str, object] | None = None,
     region: tuple[float, float] | None = None,
 ) -> ListeningPrompt:
@@ -230,12 +211,42 @@ def build(
         "Clips:",
         *(_clip_line(clip) for clip in clips),
         "",
-        _task_text(task, clips, question, brief, measurements, region),
+        _task_text(task, clips, question, measurements, region),
     ]
     parts.extend(f"\n{_context_block(context)}" for context in contexts)
-    targets = [gid for gid, _ in brief.goals] + [pid for pid, _ in brief.protect] if brief else []
     return ListeningPrompt(
         system=INSTRUCTIONS,
         prompt="\n".join(parts),
-        schema=_schema(task, [clip.label for clip in clips], targets),
+        schema=_schema(task, [clip.label for clip in clips]),
     )
+
+
+ASSESSMENT_INSTRUCTIONS = """\
+You assess a composition render against the composer's goals using only listening claims written by a \
+separate listening pass that did not know the goals. You cannot hear the audio. Downstream agents revise \
+the music based on your verdicts, so an unsupported verdict is worse than "unclear".
+"""
+
+
+def build_assessment(brief: BriefView, claims: Sequence[tuple[int, str]]) -> ListeningPrompt:
+    goals = "\n".join(f"- {gid}: {text}" for gid, text in brief.goals) or "- (none)"
+    protect = "\n".join(f"- {pid}: {text}" for pid, text in brief.protect) or "- (none)"
+    listed = "\n".join(f"[{index}] {text}" for index, text in claims) or "(no claims)"
+    prompt = (
+        "Listening claims about the render (index, then aspect, scale, time span, confidence and text):\n"
+        f"{listed}\n\nGoals:\n{goals}\nProtected relationships:\n{protect}\n\n"
+        "Give one assessment for every goal and protected relationship: met, partly, not-met or unclear. "
+        "Use unclear whenever no claim directly addresses it; never infer a problem or a success that the "
+        "claims do not state. Cite the indices of the claims you rely on, and say in the note what they "
+        "show. Write a 1-3 sentence summary."
+    )
+    targets = [gid for gid, _ in brief.goals] + [pid for pid, _ in brief.protect]
+    schema = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "assessments": _assessments_schema(targets),
+        },
+        "required": ["summary", "assessments"],
+    }
+    return ListeningPrompt(system=ASSESSMENT_INSTRUCTIONS, prompt=prompt, schema=schema)
