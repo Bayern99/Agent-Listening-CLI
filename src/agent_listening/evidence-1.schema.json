@@ -132,7 +132,7 @@
     "request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["question", "focus", "measures", "counterbalance"],
+      "required": ["question", "focus", "measures", "counterbalance", "follow_up"],
       "properties": {
         "question": {"type": ["string", "null"]},
         "focus": {
@@ -145,7 +145,8 @@
           }
         },
         "measures": {"type": "array", "items": {"type": "string"}},
-        "counterbalance": {"type": "boolean"}
+        "counterbalance": {"type": "boolean"},
+        "follow_up": {"type": "integer", "minimum": 0}
       }
     },
     "transport": {

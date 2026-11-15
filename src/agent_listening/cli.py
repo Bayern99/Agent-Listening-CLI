@@ -61,6 +61,13 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("audio_b")
     compare.add_argument("--question", default=None)
     compare.add_argument("--counterbalance", action="store_true", help="second call with clip order swapped")
+    compare.add_argument(
+        "--follow-up",
+        type=int,
+        default=2,
+        metavar="N",
+        help="re-listen calls for uncovered measured regions (0 disables, default 2)",
+    )
 
     investigate = listening("investigate", "zoomed listening plus deterministic measurements")
     investigate.add_argument("audio")
@@ -212,6 +219,7 @@ def _run_command(args: argparse.Namespace) -> tuple[Any, int]:
             question=args.question,
             contexts=args.context,
             counterbalance=args.counterbalance,
+            follow_up=args.follow_up,
             options=options,
         )
     if args.command == "investigate":

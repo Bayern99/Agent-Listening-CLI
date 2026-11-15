@@ -97,6 +97,7 @@ def _task_text(
     question: str | None,
     brief: BriefView | None,
     measurements: Mapping[str, object] | None,
+    region: tuple[float, float] | None = None,
 ) -> str:
     if task == "hear":
         return (
@@ -119,6 +120,17 @@ def _task_text(
             "perceptible difference between them (what changed, in which voice, where, and how it sounds) "
             "and the important musical properties and relationships that are preserved. Summarize the "
             f"overall effect of the change in 2-4 sentences.{extra}"
+        )
+    if task == "compare-focus":
+        if region is None:
+            raise ValueError("compare-focus needs a region")
+        return (
+            "Clips A and B are matching excerpts of the earlier and the later version. A deterministic "
+            f"measurement shows that the audio signal differs between them from about {region[0]:.2f} s to "
+            f"{region[1]:.2f} s (clip time). Listen closely to that region and describe what changed "
+            "perceptibly: which voice or sound, and how (pitch, tuning, timing, articulation, timbre or "
+            "resonance, dynamics, texture). A measured signal difference does not guarantee an audible one; "
+            'if you cannot hear a difference, say so and return no "differs" claims.'
         )
     if task == "investigate":
         focus = question or (
@@ -212,12 +224,13 @@ def build(
     contexts: Sequence[ContextView] = (),
     brief: BriefView | None = None,
     measurements: Mapping[str, object] | None = None,
+    region: tuple[float, float] | None = None,
 ) -> ListeningPrompt:
     parts = [
         "Clips:",
         *(_clip_line(clip) for clip in clips),
         "",
-        _task_text(task, clips, question, brief, measurements),
+        _task_text(task, clips, question, brief, measurements, region),
     ]
     parts.extend(f"\n{_context_block(context)}" for context in contexts)
     targets = [gid for gid, _ in brief.goals] + [pid for pid, _ in brief.protect] if brief else []

@@ -46,20 +46,24 @@ _DEFAULT_FAIL_MESSAGES = {
 }
 
 
+def _generate_index() -> int:
+    """0-based index of this generate call, from the request log (already appended)."""
+    log = os.environ.get("FAKE_GEMINI_LOG")
+    if not log or not Path(log).exists():
+        return 0
+    return max(
+        0,
+        sum(1 for line in Path(log).read_text().splitlines() if json.loads(line)["argv"][:1] == ["generate"])
+        - 1,
+    )
+
+
 def _generate(argv: list[str], stdin: str) -> int:
     sequence = [s.strip() for s in os.environ.get("FAKE_GEMINI_FAIL_SEQUENCE", "").split(",")]
     sequence = [s for s in sequence if s]
     if sequence:
-        log = os.environ.get("FAKE_GEMINI_LOG")
-        prior = -1  # this call was already recorded, so count it out
-        if log and Path(log).exists():
-            prior += sum(
-                1
-                for line in Path(log).read_text().splitlines()
-                if json.loads(line)["argv"][:1] == ["generate"]
-            )
-        prior = max(0, prior)
-        if prior < len(sequence):
+        prior = _generate_index()
+        if prior < len(sequence) and sequence[prior] != "ok":
             error_type = sequence[prior]
             message = os.environ.get("FAKE_GEMINI_FAIL_MESSAGE") or _DEFAULT_FAIL_MESSAGES.get(
                 error_type, "simulated failure"
@@ -86,6 +90,10 @@ def _generate(argv: list[str], stdin: str) -> int:
         print(json.dumps(err), file=sys.stderr)
         return exit_code
     reply_path = os.environ.get("FAKE_GEMINI_REPLY")
+    replies = os.environ.get("FAKE_GEMINI_REPLIES")
+    if replies:
+        paths = json.loads(replies)
+        reply_path = paths[min(_generate_index(), len(paths) - 1)]
     payload = json.loads(Path(reply_path).read_text(encoding="utf-8")) if reply_path else DEFAULT_REPLY
     interaction = {
         "created": "2026-11-15T00:00:00Z",

@@ -44,6 +44,7 @@ LIM_TIME = "MODEL_TIME_APPROXIMATE"
 LIM_CONTEXT = "CONTEXT_SUPPLIED"
 LIM_DIFF_UNAVAILABLE = "DIFFERENCE_CHECK_UNAVAILABLE"
 LIM_DRY_RUN = "DRY_RUN_NO_MODEL_CALL"
+LIM_FOLLOW_UP = "MEASUREMENT_GUIDED_FOLLOW_UP"
 
 
 class UsageError(Exception):
@@ -345,6 +346,16 @@ def _run_single(
         [Mapping[str, object], tuple[evidence.Claim, ...]], tuple[tuple[Assessment, ...], tuple[str, ...]]
     ]
     | None = None,
+    follow_up: Callable[
+        [tuple[evidence.Claim, ...]],
+        tuple[
+            tuple[evidence.Claim, ...],
+            tuple[evidence.Transport, ...],
+            list[gemini.Reply],
+            list[str],
+        ],
+    ]
+    | None = None,
     base_limitations: Sequence[str] = (),
 ) -> tuple[Evidence, int]:
     extra_limitations: list[str] = list(base_limitations)
@@ -382,13 +393,20 @@ def _run_single(
             assessments, assess_problems = assess(reply.payload, claims)
             problems = (*problems, *assess_problems)
         extra_limitations.extend(_problems_limitations(problems))
+        replies = [reply]
+        if follow_up is not None:
+            f_claims, f_transports, f_replies, f_limits = follow_up(claims)
+            claims = (*claims, *f_claims)
+            transports = (*transports, *f_transports)
+            replies += f_replies
+            extra_limitations.extend(f_limits)
         summary = str(reply.payload.get("summary") or "")
         raw_answer = reply.payload.get("answer")
         if isinstance(raw_answer, str):
             answer = raw_answer
         elif task in ("ask", "investigate"):
             extra_limitations.append("MODEL_OUTPUT_ADJUSTED: missing answer field")
-        producer = _producer(options, [reply], built.system, built.prompt, built.schema)
+        producer = _producer(options, replies, built.system, built.prompt, built.schema)
         status = "complete"
     limitations = _limitations(transports, contexts, inputs, reply is not None, extra_limitations)
     return (
@@ -431,12 +449,17 @@ def compare(
     question: str | None,
     contexts: Sequence[str],
     counterbalance: bool,
+    follow_up: int = 2,
     options: Options,
 ) -> tuple[Evidence, int]:
+    if follow_up < 0:
+        raise UsageError("--follow-up must be >= 0")
     inputs = _identify_inputs([(audio_a, "A", "before"), (audio_b, "B", "after")])
     ctx_files, ctx_views = _contexts(contexts)
     measurements: list[Measurement] = [audio.pcm_identity(inputs[0], inputs[1])]
-    request = Request(question=question, focus=None, measures=(), counterbalance=counterbalance)
+    request = Request(
+        question=question, focus=None, measures=(), counterbalance=counterbalance, follow_up=follow_up
+    )
     if measurements[0].result["identical"]:
         return (
             _evidence(
@@ -471,6 +494,86 @@ def compare(
             claims, regions=regions, global_change=global_change, measurement_id=diff_id
         )
 
+    def follow_ups(
+        checked: tuple[evidence.Claim, ...],
+    ) -> tuple[tuple[evidence.Claim, ...], tuple[evidence.Transport, ...], list[gemini.Reply], list[str]]:
+        """Re-hear measured regions no consistent differs-claim covers, as matched excerpts."""
+        if options.dry_run or follow_up <= 0 or not diff.result.get("available") or global_change:
+            return (), (), [], []
+        tolerance = evidence.DIFFERENCE_TOLERANCE_S
+        uncovered = [
+            region
+            for region in diff.result.get("regions", [])
+            if "only_in" not in region
+            and not any(
+                c.relation == "differs"
+                and c.status == "consistent"
+                and any(
+                    max(
+                        0.0,
+                        min(loc.end, float(region["end"]) + tolerance)
+                        - max(loc.start, float(region["start"]) - tolerance),
+                    )
+                    > 0
+                    for loc in c.loci
+                    if loc.input == "A"
+                )
+                for c in checked
+            )
+        ]
+        uncovered.sort(key=lambda r: (-float(r.get("peak_db", 0.0)), float(r["start"])))
+        lag = float(diff.result.get("lag_s", 0.0))
+        diff_id = f"m{len(measurements)}"
+        out_claims: list[evidence.Claim] = []
+        out_transports: list[evidence.Transport] = []
+        replies: list[gemini.Reply] = []
+        limitations: list[str] = []
+        for n, region in enumerate(uncovered[:follow_up]):
+            start, end = float(region["start"]), float(region["end"])
+            window_a = (max(0.0, start - 2.0), min(inputs[0].format.duration_s, end + 2.0))
+            window_b = (
+                max(0.0, window_a[0] + lag),
+                min(inputs[1].format.duration_s, window_a[1] + lag),
+            )
+            tr_a = audio.transport(inputs[0], options.cache_dir, window_a)
+            tr_b = audio.transport(inputs[1], options.cache_dir, window_b)
+            built_f = prompts.build(
+                "compare-focus",
+                [_clip_view(inputs[0], tr_a), _clip_view(inputs[1], tr_b)],
+                region=(start - window_a[0], end - window_a[0]),
+            )
+            try:
+                reply = _listen_or_dry(options, built_f, [tr_a, tr_b])
+            except gemini.ProviderError as exc:
+                limitations.append(f"FOLLOW_UP_FAILED: {exc.code}")
+                break
+            if reply is None:
+                break
+            replies.append(reply)
+            out_transports += [tr_a, tr_b]
+            clip_infos = {"A": _clip_info(inputs[0], tr_a), "B": _clip_info(inputs[1], tr_b)}
+            run_claims, run_problems = evidence.claims_from_model(
+                reply.payload, clip_infos, id_prefix=f"f{n}_"
+            )
+            run_claims = evidence.apply_difference_check(
+                run_claims, regions=regions, global_change=False, measurement_id=diff_id
+            )
+            guided = evidence.Check(
+                name="measurement-guided",
+                result="pass",
+                detail=(f"re-heard after measured difference region {start:.2f}-{end:.2f} s was pointed out"),
+                measurement=diff_id,
+            )
+            for claim in run_claims:
+                checks = (*claim.checks, guided)
+                out_claims.append(
+                    replace(claim, checks=checks, status=evidence.derive_status(claim.loci, checks))
+                )
+            limitations.extend(_problems_limitations(run_problems))
+        if replies:
+            limitations.append(LIM_FOLLOW_UP)
+        return tuple(out_claims), tuple(out_transports), replies, limitations
+
     if not counterbalance:
         return _run_single(
             task="compare",
@@ -484,6 +587,7 @@ def compare(
             built=built,
             options=options,
             post=post,
+            follow_up=follow_ups,
             base_limitations=extra,
         )
 
@@ -545,6 +649,11 @@ def compare(
         summary = ""
         producer = None
     else:
+        f_claims, f_transports, f_replies, f_limits = follow_ups(claims)
+        claims = (*claims, *f_claims)
+        transports = (*transports, *f_transports)
+        replies += f_replies
+        extra_limitations.extend(f_limits)
         status = "complete"
         summary = summaries[0] if summaries else ""
         producer = _producer(options, replies, built.system, built.prompt, built.schema)

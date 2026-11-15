@@ -149,6 +149,13 @@ When inputs share a sample rate it measures signal-difference regions (cross-cor
 blockwise residual-to-signal ratio) and contradicts model difference claims that fall outside every measured
 region beyond a tolerance. Global changes make the check inapplicable rather than permissive.
 
+Measurement-guided follow-up (added after the pilot, where whole-clip comparison missed audible
+articulation and resonance edits and answered "no perceptible difference"): measured difference regions that
+no `consistent` difference claim covers are re-heard as matching A/B excerpts with the region pointed out
+(`--follow-up N`, default 2 regions, 0 disables). Those claims carry an informational `measurement-guided`
+check: their location was primed by measurement, so only their description (what changed, in which voice)
+is model evidence.
+
 ### 3.3 Modules and dependency rules
 
 ```text

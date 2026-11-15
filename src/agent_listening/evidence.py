@@ -190,9 +190,11 @@ class Request:
     focus: Focus | None
     measures: tuple[str, ...]
     counterbalance: bool
+    follow_up: int = 0
 
     def __post_init__(self) -> None:
         _require(isinstance(self.measures, tuple), "measures must be a tuple")
+        _require(self.follow_up >= 0, "follow_up must be non-negative")
 
 
 @dataclass(frozen=True)

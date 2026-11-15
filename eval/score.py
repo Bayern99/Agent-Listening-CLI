@@ -72,28 +72,36 @@ def difference_regions(evidence: dict) -> list[list[float]] | None:
     return None
 
 
+def guided(claim: dict) -> bool:
+    return any(k["name"] == "measurement-guided" for k in claim["checks"])
+
+
 def score_change(evidence: dict, truth: dict) -> dict:
     region = truth["regions"][0]
     differs = [c for c in evidence["claims"] if c.get("relation") == "differs"]
-    right = [c for c in differs if c["aspect"] in truth["aspects"]]
+    main = [c for c in differs if not guided(c)]
+    right = [c for c in main if c["aspect"] in truth["aspects"]]
+    right_guided = [c for c in differs if guided(c) and c["aspect"] in truth["aspects"]]
     errors = [abs(locus["start"] - region[0]) for c in right for locus in c["loci"]]
-    false_pos = [c for c in differs if not any(overlaps(locus, region, HIT_S) for locus in c["loci"])]
+    false_pos = [c for c in main if not any(overlaps(locus, region, HIT_S) for locus in c["loci"])]
     regions = difference_regions(evidence)
     det_error = abs(min(r[0] for r in regions) - region[0]) if regions else None
     return {
         "detected": bool(right),
         "detected_after_checks": any(c["status"] != "contradicted" for c in right),
+        "detected_with_follow_up": bool(right) or bool(right_guided),
+        "follow_up_claims": sum(guided(c) for c in differs),
         "onset_error_s": min(errors) if errors else None,
         "onset_hit3": bool(errors) and min(errors) <= HIT_S,
         "overlap_hit": any(overlaps(locus, region, HIT_S) for c in right for locus in c["loci"]),
-        "differs_claims": len(differs),
+        "differs_claims": len(main),
         "false_positive_claims": len(false_pos),
         "false_positive_after_checks": sum(c["status"] != "contradicted" for c in false_pos),
         "deterministic_onset_error_s": det_error,
         "deterministic_onset_hit3": det_error is not None and det_error <= HIT_S,
         "order_consistent": [
             any(k["name"] == "order-consistency" and k["result"] == "pass" for k in c["checks"])
-            for c in differs
+            for c in main
             if any(k["name"] == "order-consistency" for k in c["checks"])
         ],
     }
@@ -189,14 +197,20 @@ def main() -> None:
         results = [r["result"] for r in group]
         if kind == "change":
             per_change = defaultdict(list)
+            per_change_fu = defaultdict(list)
             for r in group:
                 per_change[r["truth"]["change"]].append(r["result"]["detected"])
+                per_change_fu[r["truth"]["change"]].append(r["result"]["detected_with_follow_up"])
             consistent = [x for r in results for x in r["order_consistent"]]
             summary[key] = {
                 "detection": wilson(sum(r["detected"] for r in results), len(results)),
                 "detection_after_checks": wilson(
                     sum(r["detected_after_checks"] for r in results), len(results)
                 ),
+                "detection_with_follow_up": wilson(
+                    sum(r["detected_with_follow_up"] for r in results), len(results)
+                ),
+                "follow_up_claims": sum(r["follow_up_claims"] for r in results),
                 "onset_hit3": wilson(sum(r["onset_hit3"] for r in results), len(results)),
                 "onset_error_s": median_ci(
                     [r["onset_error_s"] for r in results if r["onset_error_s"] is not None]
@@ -212,6 +226,9 @@ def main() -> None:
                     sum(r["deterministic_onset_hit3"] for r in results), len(results)
                 ),
                 "by_change": {c: wilson(sum(v), len(v)) for c, v in sorted(per_change.items())},
+                "by_change_with_follow_up": {
+                    c: wilson(sum(v), len(v)) for c, v in sorted(per_change_fu.items())
+                },
                 "order_consistency": wilson(sum(consistent), len(consistent)),
             }
         elif kind == "null":

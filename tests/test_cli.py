@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from conftest import FAKE_GEMINI, read_log
@@ -373,3 +374,174 @@ def test_producer_attempts_in_evidence(tmp_path, monkeypatch):
     assert proc.returncode == 0, proc.stderr
     ev = json.loads(proc.stdout)
     assert ev["producer"]["attempts"] == 2
+
+
+# --- measurement-guided compare follow-up ---
+
+
+def _compare_pair(tmp_path, changes):
+    """Two 5 s stereo WAVs; B = A with (start, end, gain) regions amplified."""
+    sr = SR
+    rng = np.random.default_rng(3)
+    a_data = 0.05 * np.repeat(
+        (np.sin(2 * np.pi * 330 * np.arange(5 * sr) / sr))[:, None], 2, axis=1
+    ) + 0.2 * rng.standard_normal((5 * sr, 2))
+    b_data = a_data.copy()
+    for start, end, gain in changes:
+        b_data[int(start * sr) : int(end * sr)] *= gain
+    a = tmp_path / "a.wav"
+    b = tmp_path / "b.wav"
+    sf.write(str(a), a_data, sr, subtype="PCM_16", format="WAV")
+    sf.write(str(b), b_data, sr, subtype="PCM_16", format="WAV")
+    return a, b
+
+
+def _replies_env(tmp_path, payloads):
+    paths = []
+    for i, payload in enumerate(payloads):
+        p = tmp_path / f"reply{i}.json"
+        p.write_text(json.dumps(payload))
+        paths.append(str(p))
+    return json.dumps(paths)
+
+
+UNCHANGED_REPLY = {
+    "summary": "sounds identical",
+    "claims": [
+        {
+            "text": "no audible difference",
+            "aspect": "timbre",
+            "scale": "work",
+            "loci": [],
+            "relation": "unchanged",
+            "basis": "audio",
+            "confidence": "high",
+        }
+    ],
+}
+
+
+def _follow_reply():
+    return {
+        "summary": "the bell gains resonance",
+        "claims": [
+            {
+                "text": "the bell sustains longer in B",
+                "aspect": "timbre",
+                "scale": "event",
+                "loci": [{"clip": "A", "start": 2.0, "end": 3.0}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            }
+        ],
+    }
+
+
+def test_compare_follow_up_fires_on_uncovered_region(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 2.0, 3.0)])
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [UNCHANGED_REPLY, _follow_reply()]))
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 2
+    assert "deterministic measurement shows" in gens[1]["argv"][1]
+    # main unchanged claim is contradicted by the measurement
+    assert ev["claims"][0]["status"] == "contradicted"
+    # follow-up: two excerpt transports appended after the two full ones
+    follow_tr = ev["transport"][2:]
+    assert len(follow_tr) == 2
+    assert all(t["operation"] == "excerpt" for t in follow_tr)
+    window_start = follow_tr[0]["offset_s"]
+    assert window_start == pytest.approx(0.0, abs=0.2)
+    # two -i args on the follow-up call are the excerpt paths
+    follow_inputs = [gens[1]["argv"][i + 1] for i, v in enumerate(gens[1]["argv"]) if v == "-i"]
+    assert follow_inputs == [follow_tr[0]["path"], follow_tr[1]["path"]]
+    # follow-up claim: clip-time 2.0-3.0 maps back to input time (offset ~0)
+    fclaim = next(c for c in ev["claims"] if c["id"].startswith("f0_"))
+    assert fclaim["loci"][0]["start"] == pytest.approx(window_start + 2.0, abs=0.01)
+    assert fclaim["loci"][0]["end"] == pytest.approx(window_start + 3.0, abs=0.01)
+    kinds = {c["name"]: c["result"] for c in fclaim["checks"]}
+    assert kinds["signal-difference"] == "pass"
+    assert kinds["measurement-guided"] == "pass"
+    assert fclaim["status"] == "consistent"
+    assert "MEASUREMENT_GUIDED_FOLLOW_UP" in ev["limitations"]
+    assert ev["producer"]["attempts"] == 2
+    assert ev["request"]["follow_up"] == 2
+
+
+def test_compare_follow_up_skipped_when_region_covered(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 2.0, 3.0)])
+    covered_reply = {
+        "summary": "louder middle",
+        "claims": [
+            {
+                "text": "middle section louder",
+                "aspect": "dynamics",
+                "scale": "event",
+                "loci": [{"clip": "A", "start": 1.0, "end": 2.0}],
+                "relation": "differs",
+                "basis": "audio",
+                "confidence": "high",
+            }
+        ],
+    }
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, covered_reply))
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+
+
+def test_compare_follow_up_zero_disables(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 2.0, 3.0)])
+    env, log = _env(tmp_path)
+    proc = _run(["compare", str(a), str(b), "--follow-up", "0"], env)
+    assert proc.returncode == 0, proc.stderr
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+    assert json.loads(proc.stdout)["request"]["follow_up"] == 0
+
+
+def test_compare_follow_up_skipped_on_global_change(tmp_path):
+    a, b = _compare_pair(tmp_path, [(0.0, 5.0, 4.0)])
+    env, log = _env(tmp_path)
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+
+
+def test_compare_follow_up_failure_keeps_main_result(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 2.0, 3.0)])
+    env, _ = _env(
+        tmp_path,
+        FAKE_GEMINI_FAIL_SEQUENCE="ok,server_error,server_error,server_error",
+        FAKE_GEMINI_FAIL_MESSAGE="High demand. Please retry in 0s.",
+    )
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    assert ev["status"] == "complete"
+    assert any(lim.startswith("FOLLOW_UP_FAILED:") for lim in ev["limitations"])
+
+
+def test_compare_follow_up_picks_highest_peak(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 1.4, 1.5), (3.0, 3.5, 6.0)])
+    env, log = _env(tmp_path, FAKE_GEMINI_REPLIES=_replies_env(tmp_path, [UNCHANGED_REPLY, _follow_reply()]))
+    proc = _run(["compare", str(a), str(b), "--follow-up", "1"], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 2
+    # the louder (higher peak_db) region near 3s wins: its excerpt window starts ~1.0s
+    assert ev["transport"][2]["offset_s"] == pytest.approx(1.0, abs=0.5)
+
+
+def test_compare_follow_up_dry_run_skips(tmp_path):
+    a, b = _compare_pair(tmp_path, [(1.0, 2.0, 3.0)])
+    env, log = _env(tmp_path)
+    proc = _run(["compare", str(a), str(b), "--dry-run"], env)
+    assert proc.returncode == 0, proc.stderr
+    assert not log.exists() or not [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
