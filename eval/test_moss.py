@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import moss
+from moss_recover import recoverable
 
 
 def test_response_validation_preserves_failure_and_choice():
@@ -60,3 +61,17 @@ def test_runner_rejects_manifest_mismatch_before_inference(tmp_path):
     case = {"id": "hash-test", "task": "hear", "inputs": [recipe]}
     with pytest.raises(ValueError, match="build-manifest hash mismatch"):
         moss.execute(case, "H", manifest, None, tmp_path / "run")
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"status": "failed", "error": "RuntimeError: MPS backend out of memory"}, True),
+        ({"status": "failed", "error": "JSONDecodeError", "raw_response": "{"}, False),
+        ({"status": "failed", "error": "MPS backend out of memory", "raw_response": ""}, False),
+        ({"status": "failed", "error": "NONFINITE_LOGITS"}, False),
+        ({"status": "complete", "error": "MPS backend out of memory"}, False),
+    ],
+)
+def test_recovery_never_retries_a_generated_answer(record, expected):
+    assert recoverable(record) is expected
