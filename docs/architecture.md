@@ -246,6 +246,33 @@ differences; failures and disagreements are listed, not averaged away.
 - Wheel < 150 KB; tracked files fewer than 0.2.0.
 - Per-request latency, input/audio/thought tokens and cost per audio minute recorded from `usage`.
 
+### 4.1 Results (2026-11-15, gemini-4-hydrogen via gemini-api 0.4.5)
+
+Thresholds were committed in `eval/thresholds.json` (f5b2aa1) after pilot-3 and before the holdout. The holdout
+(100 runs, 96 model calls) used the wheel built from 1b05b5e; "final checks" re-applies the current deterministic
+checks to the same stored claims with `eval/recheck.py` (no new model calls). Intervals are Wilson 95 %.
+
+| Measure | Result |
+| --- | --- |
+| Bit-identical pairs | 4/4 reported identical, 0 model calls |
+| Near-null pairs, hallucinated differences | 0/5 cases |
+| Misleading source context (claims a detune that is absent) | 2 hallucinated difference claims in 1/1 case; survived the 1b05b5e checks (hard criterion failed), contradicted by the final checks |
+| Controlled edits, right kind of change named | 3/23 = 13 % [5, 32]; mute 1/3, timing 1/3, pitch 1/5, articulation 0/3, resonance 0/5, balance, dynamics, entry, removed theme return 0/1 each |
+| Controlled edits, any difference claim at the right place (±3 s) | 7/23 = 30 % [16, 51] |
+| Deterministic difference onset within 3 s | 23/23 |
+| With source context (SC cases) | 3/3 named, but the misleading-context control shows context alone produces such claims |
+| Counterbalanced order, difference claims reproduced after swapping | 0/10 |
+| "Unchanged" claims lying over real edits contradicted | 379/419 (1b05b5e), 385/419 final; 0/47 on near-null pairs; 20/20 true difference claims kept |
+| Multiple-choice perception questions | 39/45 = 87 % [74, 94], chance 27 %; MUSE contour 18/18 (zero-shot single turn, not the paper's chat protocol); Bach10 instrument count 3/3, highest/lowest instrument 3/6, articulation in a focused passage 1/3; gamelan tuning, pulse and instrument families 7/7; fugue entry order, textures and SC theme returns 6/6; voice count 1/2 |
+| `hear` on long-form and non-Western recordings | 4/4 documents fully grounded, all four timescales, 5-9 relations each |
+| Revision pilot (5 SC defects × 3) | code only 15/15, code + listening 15/15, difference 0 [-0.20, 0.20]: ceiling, not discriminative |
+| Goal review on defective vs corrected renders | goals in the listening prompt: 5/5 flagged, 5/5 corrected falsely flagged; goal-blind: 2/5 flagged, 2/5 falsely flagged |
+| Cost | median 35 s per call, US$0.027 per audio minute, US$4.59 for the holdout |
+
+Conclusions: deterministic measurement, not the listening model, is what localizes change; the model is useful for
+multiple-choice perception, description of whole recordings and broad structure, and is unreliable for subtle
+single-voice edits, order-stable comparison and goal verdicts. Usefulness for real revision is not demonstrated.
+
 Human blind listening (ABX for difference claims, BS.1116-style hidden-reference grading for subtle
 changes, Krippendorff's α across raters) is specified here but not executed in 1.0: it needs recruited
 listeners. Engineering tests passing does not show that music got better.
@@ -300,7 +327,7 @@ a match only on a `before` input fails with `ARTIFACT_ROLE_MISMATCH`. Evidence `
 the result keeps the `sc-agent-ide/analysis-check` v1 shape with `versions.evidence`. The `--receipt`
 path for 0.2 stays byte-for-byte unchanged.
 
-Migration: released SC Agent IDE ≤ 1.9.1 only understands 0.2 receipts. Users of those releases keep
+Migration: every SC Agent IDE release and `main` up to 1.12.1-rc.1 only understands 0.2 receipts. Users of those releases keep
 `agent-listening` 0.2.0 (`uv tool install git+https://github.com/Bayern99/Agent-Listening-CLI@v0.2.0`);
 with 1.0 installed the old checker fails loudly (`RECEIPT_VERSION_UNKNOWN`, exit 1), never silently.
 The coordinated SC Agent IDE change accepts both formats, so upgrading the IDE first is always safe.
