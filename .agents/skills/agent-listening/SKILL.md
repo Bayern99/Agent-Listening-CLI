@@ -1,93 +1,63 @@
 ---
 name: agent-listening
-description: Analyze rendered or finished audio with the installed agent-listening CLI into compact Music IR, JAMS timing evidence, and optional stem or note artifacts. Use for machine-readable evidence from an audio file; not for audio generation, editing, or live monitoring.
+description: Listen to real rendered or recorded audio with the agent-listening CLI and get time-located, deterministically checked evidence. Use to hear a render, ask a question about a passage, compare two versions, investigate a sound or voice, or review a render against artistic goals. Not for generating or editing audio.
 ---
 
 # Agent Listening
 
-Use the installed `agent-listening` command as the only integration surface.
-Do not import repository internals, invoke the contributor checkout wrapper, or
-load source code and frame arrays into the agent context.
+`agent-listening` (1.x) sends audio to `gemini-4-hydrogen` through the `gemini-api` CLI and returns one
+JSON evidence document (`agent-listening/evidence` v1). Run `agent-listening doctor` once; exit 0 means
+the provider CLI and credential are ready.
 
-## Runtime contract
+## Pick the task
 
-This Skill targets `agent-listening-cli` v0.2.0 on CPython 3.11. First check the
-command and version:
+| Need | Command |
+| --- | --- |
+| What does this render sound like? | `agent-listening hear AUDIO [--focus 1:20-1:45]` |
+| One specific question | `agent-listening ask AUDIO "QUESTION" [--focus S-E]` |
+| What changed between two versions? | `agent-listening compare BEFORE AFTER [--question Q]` |
+| Close look at one sound, voice or passage | `agent-listening investigate AUDIO --focus S-E ["QUESTION"]` |
+| Does the render meet the goals? | `agent-listening review AUDIO --brief brief.json [--before PREV]` |
 
-```bash
-command -v agent-listening
-agent-listening --version
+Add `--out FILE.json` to save the evidence (no-clobber). Each listening call takes roughly 15–120 s, so
+listen only when the answer can change your next decision. Ask multiple-choice questions when you can;
+lettered options make answers comparable across revisions.
+
+A brief is human intent, written by the composer, never invented by you:
+
+```json
+{"goals": ["The second voice answers the first in imitation"],
+ "protect": [{"text": "The low drone stays continuous", "loci": [{"start": 0, "end": 30}]}]}
 ```
 
-If the command is missing, the version is not `agent-listening 0.2.0`, or
-`doctor` is unavailable, install the pinned release. Do not reinstall on every
-invocation.
+## Source code as context
 
-```bash
-uv tool install --python 3.11 --force \
-  "git+https://github.com/Bayern99/Agent-Listening-CLI.git@v0.2.0" &&
-hash -r &&
-agent-listening --version &&
-agent-listening doctor --analysis-mode solo --json
-```
+`--context FILE` adds SuperCollider source or score text. Listen without context first: context can make
+the model report what the code intends instead of what the audio contains. Claims whose `basis` is
+`context` or `audio+context` reflect that text; weigh `audio` claims for perceptual questions.
 
-If installation, version verification, or `doctor` fails, stop and report the
-error. Do not fall through to another same-named executable already on `PATH`.
-The binary help is the versioned command contract; run
-`agent-listening --help` or `agent-listening <command> --help` instead of
-guessing flags.
+## Read the evidence
 
-## Choose the analysis mode
+1. `status`: `complete`, `partial` (dry run), or `failed` (see `error`; identity and measurements remain).
+2. `summary` / `answer`, then `claims`. Each claim has `loci` (input label, start, end in seconds of that
+   input), `aspect`, `scale` (event, phrase, section, work), optional `relation`, `basis`, `confidence`.
+3. Claim `status` comes from deterministic checks, never from the model:
+   - `contradicted`: the signal disagrees (a difference claimed on identical audio, or outside every measured
+     difference region). Discard it.
+   - `ungrounded`: no valid time locus. Treat as an unlocated impression.
+   - `consistent`: a deterministic check agrees. Still a model claim, not ground truth.
+   - `unchecked`: no deterministic check applies (most `hear`/`ask` claims).
+4. `limitations`: `MODEL_INPUT_MONO` means the model heard a mono mix (no stereo judgements);
+   `MODEL_TIME_APPROXIMATE` means times are approximate at the seconds scale; `CONTEXT_SUPPLIED` flags
+   possible priming.
+5. In `compare`, bit-identical inputs return zero claims without a model call; the
+   `signal-difference` measurement lists where the samples actually changed.
 
-- `solo`: one isolated voice or instrument; runs acoustic evidence, continuous
-  pitch, and Basic Pitch notes/MIDI.
-- `stem`: an already-isolated source supplied by the caller; runs the same
-  pitch/note path as `solo`. The CLI records `analysis_mode=stem` but does not
-  accept or infer a richer caller-supplied source role.
-- `full_mix`: a finished mix; runs full-mix evidence, all-in-one, Demucs
-  `htdemucs_6s`, and per-stem analysis. It is slower, may download model
-  weights, and does not run Basic Pitch on `drums`.
+Model timestamps and pitch names are approximate. Before a change depends on a claim, confirm it with a
+focused `investigate`, a `compare` against the previous render, or the human.
 
-Choose from the actual input; do not use `full_mix` merely because it is the CLI
-default. Before an expensive first analysis, run `doctor --json` with the same
-`solo`, `stem`, or `full_mix` mode you selected.
+## SC Agent IDE
 
-## Analyze
-
-Use absolute paths, a fresh job output directory, and structured output:
-
-```bash
-agent-listening analyze "/absolute/path/to/audio.wav" \
-  --analysis-mode solo \
-  --output-dir "/absolute/path/to/job-output" \
-  --json
-```
-
-Existing artifacts are no-clobber by default. On `FileExistsError`, inspect the
-existing output or choose a new directory. Use `--overwrite` only when the user
-has explicitly authorized replacing that track's existing JAMS, Music IR, raw,
-stem, and symbol artifacts.
-
-## Read the result
-
-Require both exit code `0` and `receipt.status == "success"`. On a nonzero exit,
-parse the JSON error receipt from stdout and stop. Extractor chatter belongs on
-stderr and is not the receipt.
-
-Follow `receipt.next` and open only artifact paths listed by the receipt. Usually
-this means compact Music IR first, JAMS for timing or candidates, symbols/stems
-when available, and raw evidence only for provenance or diagnosis. Never load
-large frame arrays by default.
-
-Interpret capability values literally:
-
-- `available`: evidence exists and may be read;
-- `not_applicable`: the mode does not use that capability;
-- `not_detected`: the extractor ran but did not publish usable evidence;
-- `failed`: that extractor failed; preserve and use other successful evidence.
-
-Execution and schema validation are not human listening approval. Sections,
-key, separation, and automatic transcription remain machine evidence until a
-person reviews them. Note events are not score ground truth, and Basic Pitch
-amplitude is not loudness. Use timestamps in an external player or DAW when
-human audition is needed; do not start a GUI, Web server, or MCP service.
+Write evidence into the run's analysis directory and bind it to the render before reading conclusions:
+`node helpers/check-analysis.mjs ... --evidence <file>` (exit 0 verified, 2 unverified, 1 failed).
+Machine evidence never replaces the human Accept/Revise decision.

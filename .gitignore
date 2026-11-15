@@ -32,13 +32,11 @@ ENV/
 .LSOverride
 ._*
 
-# Audio and Extractor Raw Artifacts (Local only)
-source/*
-!source/.gitkeep
-raw/*
-!raw/.gitkeep
-jams/*.analysis.jams
-music-ir/*.music-ir.json
+# Local audio inputs and generated artifacts
+source/
+raw/
+jams/*.jams
+music-ir/*.json
 
 # IDE and Editor
 .idea/
@@ -50,3 +48,12 @@ music-ir/*.music-ir.json
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Mutation testing
+.mutmut-cache
+mutants/
+
+# Hypothesis / import-linter / build
+.hypothesis/
+.import_linter_cache/
+dist/
