@@ -1,0 +1,144 @@
+# MOSS-Music comparative listening evaluation
+
+## Method fixed before the holdout
+
+This evaluation asks whether MOSS-Music supplies independently checked musical listening gains over
+the stored `gemini-4-hydrogen` holdout. The decision set is the existing holdout, including MUSE
+(`AGENT_LISTENING_EVAL_PAID_TIER=1` enables those existing cases; inference here is local).
+Development uses only pilot cases. The method commit precedes the first MOSS holdout call.
+No product dependency, contract, threshold, CLI behaviour or SC Agent IDE code changes.
+
+The runner resolves `corpus.py` recipes against `build-manifest.json`, checks the original file hashes,
+and uses the product's unmodified `prompts.build`, `claims_from_model`, deterministic difference checks
+and `apply_order_check`. The resulting files are **scorer inputs**, marked `evaluation_only`, not
+complete product evidence documents. `eval/score.py` supplies the scoring functions without changes.
+Raw responses, exact prompts, original paths/hashes, resampled waveform hashes, generation settings,
+device, dtype, elapsed time and sampled memory are saved atomically after each call. Existing response
+files are resumed rather than regenerated. Schema/JSON failures are recorded, without model repair.
+
+The conditions are:
+
+- H: the existing task and question, without context. `investigate` uses the same physical focus excerpt
+  and deterministic measurements as Hydrogen. Description and multiple-choice questions retain their
+  existing tasks. Unprompted description scores measure grounding and coverage, not perceptual truth.
+- CB: the same 15 holdout Bach10 edits as Hydrogen. Two fresh calls present A/B and B/A; clip identities
+  and reference/after roles stay fixed. The existing checker matches aspect and overlapping original
+  loci. Its denominator is **difference claims**, not cases; a case with no differences contributes
+  no claim. Report case coverage alongside that metric.
+- H+C and MC: the same source files and misleading context as `eval/run.py`. No filenames, construction
+  recipe, answer, instrument identity or expected change aspect enter the listening prompt.
+- F: all 23 controlled holdout edits, as a separate condition. Both **complete audio files** remain
+  unchanged; the existing `compare-focus` text supplies only the construction recipe's known changed
+  interval, in seconds. This is oracle location assistance, with no changed aspect or answer supplied.
+  It measures naming with attention directed to a region, not independent detection or localization.
+  It differs from Hydrogen's automatic, selectively triggered cropped follow-ups and is not claimed
+  to be an identical-task comparison against those follow-ups.
+- Identical: the same PCM identity shortcut as Hydrogen (zero model calls), plus separate IM calls
+  that send the identical pair to MOSS. IM measures model hallucination and is not attributed to the
+  zero-call product path. Near-null and MC comparisons always reach the model.
+
+The prompt uses the same system instructions and task text as Hydrogen, with the existing JSON schema
+written in the user message because Transformers has no constrained JSON response mode here. It asks
+for concise JSON only. Parsing accepts plain JSON or a single `json` code fence, validates the schema,
+and otherwise records failure. There are no retries, output repairs or answer extraction from prose.
+Greedy decoding uses BF16, requested SDPA (the upstream encoder retains eager attention), `do_sample=False`, `num_beams=1`, `max_new_tokens=2048`, `use_cache=True`,
+and seed 0. The encoder retains its upstream batch size of 64 four-second chunks and default MPS allocation
+limits. Unused MPS cache is cleared before each call. This removes sampling randomness; cross-device bitwise determinism is not asserted.
+
+Report `score.py`'s correct-aspect detection, aspect-correct onset Hit@3s, any-aspect interval overlap
+with the known region padded by 3 s, claim-based order consistency, raw and checked null differences,
+choice accuracy and change-kind breakdown. These distinct location metrics must not be conflated.
+Wilson intervals and median bootstrap intervals come from that scorer. Missing/failed calls and parse
+failures are reported separately; a successful-only score is never presented as complete coverage.
+Focused results use `score_change` directly in a separate group, without adding them to independent H.
+No model judges a model. No listening-panel or musical-quality claim follows from schema validity.
+
+## Upstream and machine verification
+
+Source: [OpenMOSS/MOSS-Music](https://github.com/OpenMOSS/MOSS-Music/tree/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e),
+commit `ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e`. Weights:
+[OpenMOSS-Team/MOSS-Music-8B-Instruct](https://huggingface.co/OpenMOSS-Team/MOSS-Music-8B-Instruct/tree/fce7f8304e96cc2d3398b8106456cbb2ecec3139),
+revision `fce7f8304e96cc2d3398b8106456cbb2ecec3139`. Model licence: Apache-2.0.
+
+[audio_io.py](https://github.com/OpenMOSS/MOSS-Music/blob/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e/src/audio_io.py)
+averages channels and resamples to the processor's 16,000 Hz. The runner decodes with soundfile,
+averages channels and uses the same `torchaudio.functional.resample` defaults. This bypasses
+`torchaudio.load`'s TorchCodec runtime without patching upstream code. Audio is not normalised.
+
+[processing_moss_music.py](https://github.com/OpenMOSS/MOSS-Music/blob/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e/src/processing_moss_music.py)
+accepts multiple waveforms and explicit repeated audio spans, checks placeholder count, and resets
+the two-second time markers for each span. The default convenience prompt creates only one span;
+passing two waveforms to that default would fail. Our explicit one-turn chat contains a labelled span
+for each file. A real two-waveform MPS generation succeeded before pilot. There is no concatenation
+or silence-gap substitution. Inference imports the official GitHub `src` classes, as `infer.py` does;
+the checkpoint bundles an older encoder implementation. The tested source revision is therefore part
+of the result, not interchangeable with arbitrary `AutoModel` remote code.
+
+The official sources do not state a validated maximum audio duration. The model config has a
+40,960-token language context; audio representations use 12.5 tokens/s plus time markers. The encoder
+processes four-second mel chunks, so `max_source_positions=1500` is not a whole-recording duration cap.
+The runner checks the actual total token count plus output budget and fails rather than truncating.
+The longest corpus source is 418.5 s; the longest pair is about 837 s combined. Successful processing
+would establish coverage of these inputs, not a general maximum-duration guarantee.
+
+[infer.py](https://github.com/OpenMOSS/MOSS-Music/blob/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e/infer.py)
+samples with temperature 1.0, top-p 0.8 and top-k 50; the
+[serving guide](https://github.com/OpenMOSS/MOSS-Music/blob/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e/moss_music_usage_guide.md)
+uses temperature 0.0 examples. The upstream HF wrapper explicitly supports greedy decoding with
+`do_sample=False`. Upstream recommends SGLang for best quality. This evaluation covers its Transformers
+path on Apple MPS, not SGLang/CUDA performance or published benchmark reproduction.
+
+[pyproject.toml](https://github.com/OpenMOSS/MOSS-Music/blob/ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e/pyproject.toml)
+declares base dependencies safetensors, numpy, soundfile, tiktoken, einops, scipy, tqdm, packaging,
+gradio and requests; the optional runtime pins torch/torchaudio 2.9.1+cu128, TorchCodec 0.9.*, Transformers
+4.57.1 and accelerate. The inference import path needs torch, torchaudio, Transformers, numpy and
+einops, plus Transformers' dependencies and the audio decoder. We installed the non-CUDA torch and
+torchaudio 2.9.1 wheels, Transformers 4.57.1 and accelerate in Python 3.12.16 outside the product env.
+Gradio, TorchCodec, FlashAttention and SGLang are unnecessary for this soundfile-based inference path.
+The full resolved environment is pinned in `eval/moss-requirements.txt` and copied to the external feasibility directory.
+
+The first long pilot call with upstream batch size 64 reached 146.48 GB in sampled MPS driver
+allocations, including cached allocations. A separate working-set-limit experiment was interrupted
+after about 120 s as system swap increased. A further batch-size-8 + working-set-limit trial was stopped after about 200 s without a response;
+macOS sampling recorded a peak physical footprint of 108.8G and a thread waiting for Metal work.
+The final method restores the already successful upstream defaults and clears unused cache between
+calls. These bounded memory experiments are retained as deployment evidence, not holdout results.
+
+Machine: Apple M4 Max, arm64, 128 GB unified memory. MPS is available. A patch-free BF16 + SDPA dual
+audio smoke call loaded in 7.10 s and completed in 15.68 s including load. This probe is feasibility
+evidence, not a scored listening case. There is no HF_TOKEN environment value or saved HF token;
+HF Jobs was not used. External service charge is zero; electricity and hardware amortisation are
+unmeasured. CPU fallback is unnecessary after successful MPS inference.
+
+`hf download OpenMOSS-Team/MOSS-Music-8B-Instruct` resolved the existing cache. All 24 files passed
+remote size and available digest checks (LFS SHA256; Git blob SHA1 for other files), totalling
+18,119,304,629 bytes. The standalone venv occupies about 647 MB. Upstream clone and weights are outside
+git; the runner rejects a different source commit or tracked local patch.
+
+## Reproduction
+
+From the product checkout, using the isolated interpreter:
+
+```sh
+uv venv --python 3.12 "$AGENT_LISTENING_EVAL_DIR/moss-venv"
+uv pip install --python "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
+  -r eval/moss-requirements.txt
+hf download OpenMOSS-Team/MOSS-Music-8B-Instruct --revision fce7f8304e96cc2d3398b8106456cbb2ecec3139
+AGENT_LISTENING_EVAL_PAID_TIER=1 "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
+  eval/moss.py --split holdout --run moss-holdout-1
+AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/score.py --run moss-holdout-1 --split holdout
+uv run --with scipy python -m pytest -q eval/test_moss.py
+```
+
+Set `AGENT_LISTENING_EVAL_DIR` to `/Users/dmus/.cache/agent-listening-eval` if it is not already set.
+Do not use a new holdout run name to tune the method after observing decision results. An interrupted
+run may resume the same directory; completed raw calls are reused, including parse failures.
+
+## Results
+
+Pilot: 15 completed raw calls, zero JSON/schema failures, across 8 selected pilot cases plus a
+counterbalance and identical-model control. H detection was 0/3; focused detection was 0/3; choice
+accuracy was 2/4. The near-null and identical-model controls returned no differences. Repeating the
+same AB prompt in the counterbalance call produced exactly the same text. Prompt and scoring
+thresholds were not changed after these observations. The held-out decision results follow below
+after the method commit.
