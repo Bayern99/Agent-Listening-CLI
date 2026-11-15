@@ -938,8 +938,8 @@ def test_difference_check_spectral_decision_table():
     )
     assert out[0].status == "contradicted"
 
-    # unchanged: only spectral regions contradict, even under spectral global;
-    # waveform regions (phase-sensitive) never do
+    # unchanged: spectral regions contradict, even under spectral global;
+    # waveform regions contradict only when the waveform change is local
     out = evidence.apply_difference_check(
         [_diff_claim("unchanged", 0.0, 2.0)],
         regions=wf_local,
@@ -968,7 +968,20 @@ def test_difference_check_spectral_decision_table():
         spectral_global=False,
         measurement_id="m2",
     )
-    assert out[0].status == "consistent"  # waveform region overlap no longer contradicts
+    # local waveform overlap with spectral clean -> contradicted
+    assert out[0].status == "contradicted"
+    assert "waveform" in out[0].checks[-1].detail
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 5.5, 6.5)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_far,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    # global waveform can never contradict, spectral is clean -> consistent
+    assert out[0].status == "consistent"
 
     # no spectral data (older measurements): legacy waveform-only behaviour
     out = evidence.apply_difference_check(

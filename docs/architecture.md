@@ -153,8 +153,12 @@ Spectral difference (added after a real SC revision, organ pedal bass "pure" to 
 heard as identical while the waveform residual was global and therefore inapplicable): the waveform residual
 is phase-sensitive, so a re-rendered oscillator with a new start phase "differs" without sounding different.
 `signal-difference` therefore also reports phase-invariant spectral regions (log-magnitude on a 1/12-octave
-grid). "unchanged" claims are contradicted by spectral regions, including global ones; "differs" claims are
-supported by waveform or spectral regions and become inapplicable only when both are global.
+grid). "unchanged" claims are contradicted by spectral regions (including global ones) and by local, non-global
+waveform regions; a phase-only re-render shows up as a global waveform difference, which never contradicts.
+On the stored holdout claims, spectral-only contradiction caught 174 of 419 "unchanged" claims lying over real
+edits, the combined rule is required to keep the waveform rule's coverage. "differs" claims need waveform or
+spectral regions covering min(25 % of the locus, 0.5 s), with waveform windows counted only when the residual
+exceeds -80 dBFS, and become inapplicable only when both region sets are global.
 
 Goal-blind review (added after the revision pilot's negative control): when the goals were in the
 listening prompt, Hydrogen reported every goal as violated on both the defective and the corrected renders
