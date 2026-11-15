@@ -200,3 +200,58 @@ def test_credential_env_source_is_configured(tmp_path, fake, monkeypatch):
 def test_credential_keyring_source_is_configured(tmp_path, fake, monkeypatch):
     monkeypatch.setenv("FAKE_GEMINI_CREDENTIAL", "keyring")
     assert gemini.credential_status(str(FAKE_GEMINI)) == "configured"
+
+
+def _retry_listen(tmp_path, fake, slept, **over):
+    kwargs = {
+        "executable": str(FAKE_GEMINI),
+        "model": "m",
+        "thinking": "low",
+        "system": "s",
+        "prompt": "p",
+        "audio": [_audio(tmp_path)],
+        "schema": {},
+        "sleep": slept.append,
+    }
+    kwargs.update(over)
+    return gemini.listen(**kwargs)
+
+
+def test_listen_retries_rate_limit_once(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
+    slept = []
+    reply = _retry_listen(tmp_path, fake, slept)
+    assert reply.attempts == 2
+    assert slept == [20.0]
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 2
+
+
+def test_listen_retry_hint_capped(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "rate_limit_error")
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_MESSAGE", "Quota hit. Please retry in 200s.")
+    slept = []
+    reply = _retry_listen(tmp_path, fake, slept)
+    assert reply.attempts == 2
+    assert slept == [90.0]
+
+
+def test_listen_retry_exhausted_after_three(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_FAIL_SEQUENCE", "server_error,server_error,server_error")
+    slept = []
+    with pytest.raises(gemini.ProviderError) as exc:
+        _retry_listen(tmp_path, fake, slept)
+    assert exc.value.code == "server_error"
+    assert slept == [15.0, 45.0]
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 3
+
+
+def test_listen_auth_error_never_retried(tmp_path, fake, monkeypatch):
+    monkeypatch.setenv("FAKE_GEMINI_EXIT", "3")
+    slept = []
+    with pytest.raises(gemini.ProviderError):
+        _retry_listen(tmp_path, fake, slept)
+    gens = [e for e in read_log(fake) if e["argv"][:1] == ["generate"]]
+    assert len(gens) == 1
+    assert slept == []

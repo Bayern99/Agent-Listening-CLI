@@ -114,6 +114,7 @@ def _sample_evidence() -> evidence.Evidence:
             ("ix",),
             {"input_tokens": 1, "audio_tokens": 1, "output_tokens": 1, "thought_tokens": 0},
             1.0,
+            1,
         ),
         limitations=("MODEL_TIME_APPROXIMATE",),
         error=None,

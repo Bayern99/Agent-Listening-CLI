@@ -352,11 +352,13 @@ class Producer:
     interaction_ids: tuple[str, ...]
     usage: Mapping[str, int]
     latency_s: float
+    attempts: int
 
     def __post_init__(self) -> None:
         _enum(self.thinking, THINKING_LEVELS, "thinking")
         _sha256(self.instructions_sha256, "instructions_sha256")
         _require(isinstance(self.interaction_ids, tuple), "interaction_ids must be a tuple")
+        _require(self.attempts >= 0, "attempts must be non-negative")
 
 
 @dataclass(frozen=True)

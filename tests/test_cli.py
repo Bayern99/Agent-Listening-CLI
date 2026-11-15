@@ -345,3 +345,31 @@ def test_cache_dir_expands_home(tmp_path):
     derived = home / ".cache" / "agent-listening" / "derived"
     assert derived.is_dir() and any(derived.glob("*.flac"))
     assert not (tmp_path / "~").exists()
+
+
+def test_investigate_question_option_any_order(tmp_path):
+    wav = _sine(tmp_path / "a.wav", seconds=2.0)
+    for argv in (
+        ["investigate", "--focus", "0.5-1.5", str(wav), "--question", "what pitch"],
+        ["investigate", str(wav), "--question", "what pitch", "--focus", "0.5-1.5"],
+    ):
+        env, log = _env(tmp_path)
+        proc = _run(argv, env)
+        assert proc.returncode == 0, proc.stderr
+        gens = [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+        assert len(gens) == 1
+        assert "what pitch" in gens[0]["argv"][1]
+        log.unlink()
+
+
+def test_producer_attempts_in_evidence(tmp_path, monkeypatch):
+    wav = _sine(tmp_path / "a.wav", seconds=1.0)
+    env, _ = _env(
+        tmp_path,
+        FAKE_GEMINI_FAIL_SEQUENCE="rate_limit_error",
+        FAKE_GEMINI_FAIL_MESSAGE="Rate limit hit. Please retry in 1s.",
+    )
+    proc = _run(["hear", str(wav)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    assert ev["producer"]["attempts"] == 2

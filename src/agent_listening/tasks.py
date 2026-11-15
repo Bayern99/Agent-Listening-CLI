@@ -154,6 +154,7 @@ def _producer(
         interaction_ids=tuple(r.interaction_id for r in replies if r.interaction_id is not None),
         usage=usage,
         latency_s=sum(r.latency_s for r in replies),
+        attempts=sum(r.attempts for r in replies),
     )
 
 

@@ -7,7 +7,7 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +16,12 @@ SUPPORTED_SERIES = "0.4"
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 _FILE_URI_RE = re.compile(r"files/\S+")
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+_RETRY_AFTER_RE = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+
+_RETRYABLE_ERRORS = ("rate_limit_error", "server_error")
+_MAX_ATTEMPTS = 3
+_RETRY_BACKOFF_S = (15.0, 45.0)
+_RETRY_AFTER_CAP_S = 90.0
 
 
 class ProviderError(Exception):
@@ -34,6 +40,15 @@ class Reply:
     usage: dict[str, int]
     latency_s: float
     cli_version: str
+    attempts: int
+
+
+def _retry_delay_s(error: ProviderError, failures: int) -> float:
+    """Server-hinted delay when the message carries "retry in Ns" (capped), else backoff."""
+    match = _RETRY_AFTER_RE.search(error.message)
+    if match is not None:
+        return min(float(match.group(1)), _RETRY_AFTER_CAP_S)
+    return _RETRY_BACKOFF_S[min(failures - 1, len(_RETRY_BACKOFF_S) - 1)]
 
 
 def _run(
@@ -176,8 +191,12 @@ def listen(
     schema: Mapping[str, object],
     timeout_s: float = 900,
     inline_limit_bytes: int = 14_000_000,
+    sleep: Callable[[float], object] = time.sleep,
 ) -> Reply:
-    """One non-streaming structured `gemini-api generate` call."""
+    """One non-streaming structured `gemini-api generate` call.
+
+    Transient provider errors (rate_limit_error, server_error) retry up to
+    _MAX_ATTEMPTS total attempts; uploaded inputs are reused across attempts."""
     cli_version = version(executable)
     if cli_version.split(".")[:2] != SUPPORTED_SERIES.split("."):
         raise ProviderError(
@@ -208,11 +227,19 @@ def listen(
             argv += ["-i", item]
         argv += ["--body", "@-", "--stream=false", "-o", "json", "--agent-mode"]
         started = time.monotonic()
-        proc = _run(argv, input_text=body, timeout_s=timeout_s)
+        attempts = 0
+        while True:
+            attempts += 1
+            proc = _run(argv, input_text=body, timeout_s=timeout_s)
+            if proc.returncode != 0:
+                code = "PROVIDER_AUTH" if proc.returncode == 3 else "PROVIDER_ERROR"
+                error = _agent_mode_error(proc.stderr, code, proc.returncode)
+                if error.code in _RETRYABLE_ERRORS and attempts < _MAX_ATTEMPTS:
+                    sleep(_retry_delay_s(error, attempts))
+                    continue
+                raise error
+            break
         latency_s = time.monotonic() - started
-        if proc.returncode != 0:
-            code = "PROVIDER_AUTH" if proc.returncode == 3 else "PROVIDER_ERROR"
-            raise _agent_mode_error(proc.stderr, code, proc.returncode)
         try:
             interaction = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
@@ -238,6 +265,7 @@ def listen(
             usage=_map_usage(interaction.get("usage")),
             latency_s=latency_s,
             cli_version=cli_version,
+            attempts=attempts,
         )
     finally:
         for file_uri in uploads:

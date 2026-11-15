@@ -300,7 +300,8 @@
         "instructions_sha256",
         "interaction_ids",
         "usage",
-        "latency_s"
+        "latency_s",
+        "attempts"
       ],
       "properties": {
         "provider": {"type": "string"},
@@ -320,7 +321,8 @@
             "thought_tokens": {"type": "integer"}
           }
         },
-        "latency_s": {"type": "number"}
+        "latency_s": {"type": "number"},
+        "attempts": {"type": "integer", "minimum": 0}
       }
     },
     "limitations": {"type": "array", "items": {"type": "string"}},

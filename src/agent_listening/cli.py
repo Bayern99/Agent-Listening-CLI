@@ -64,7 +64,7 @@ def _parser() -> argparse.ArgumentParser:
 
     investigate = listening("investigate", "zoomed listening plus deterministic measurements")
     investigate.add_argument("audio")
-    investigate.add_argument("question", nargs="?", default=None)
+    investigate.add_argument("--question", default=None)
     investigate.add_argument("--focus", required=True, help="time span S-E (required)")
     investigate.add_argument(
         "--measure",

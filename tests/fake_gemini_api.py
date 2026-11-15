@@ -40,7 +40,39 @@ def _whoami() -> int:
     return 0
 
 
+_DEFAULT_FAIL_MESSAGES = {
+    "rate_limit_error": "Rate limit exceeded for model. Please retry in 20s.",
+    "server_error": "The service is currently experiencing high demand. Please try again later.",
+}
+
+
 def _generate(argv: list[str], stdin: str) -> int:
+    sequence = [s.strip() for s in os.environ.get("FAKE_GEMINI_FAIL_SEQUENCE", "").split(",")]
+    sequence = [s for s in sequence if s]
+    if sequence:
+        log = os.environ.get("FAKE_GEMINI_LOG")
+        prior = -1  # this call was already recorded, so count it out
+        if log and Path(log).exists():
+            prior += sum(
+                1
+                for line in Path(log).read_text().splitlines()
+                if json.loads(line)["argv"][:1] == ["generate"]
+            )
+        prior = max(0, prior)
+        if prior < len(sequence):
+            error_type = sequence[prior]
+            message = os.environ.get("FAKE_GEMINI_FAIL_MESSAGE") or _DEFAULT_FAIL_MESSAGES.get(
+                error_type, "simulated failure"
+            )
+            err = {
+                "error": message,
+                "error_type": error_type,
+                "exit_code": 1,
+                "hints": [],
+                "message": message,
+            }
+            print(json.dumps(err), file=sys.stderr)
+            return 1
     exit_code = int(os.environ.get("FAKE_GEMINI_EXIT") or 0)
     if exit_code:
         err = {
