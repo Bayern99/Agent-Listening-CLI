@@ -732,6 +732,12 @@ def test_apply_difference_check_coverage_requirement():
     assert chk.result == "pass" and "spectral" in chk.detail
     chk = check(claim(1.0, 10.0), waveform={}, spectral={"A": [(9.9, 10.1)]})
     assert chk.result == "fail"
+    # boundary: coverage exactly equal to the requirement supports the claim
+    chk = check(claim(1.0, 3.0), waveform={"A": [(2.5, 3.0)]})
+    assert chk.result == "pass"
+    # when both sets cover the locus, the waveform set is reported first
+    chk = check(claim(1.0, 3.0), waveform={"A": [(1.2, 4.0)]}, spectral={"A": [(1.2, 4.0)]})
+    assert chk.result == "pass" and "waveform" in chk.detail
 
 
 def test_apply_order_check_mismatch_and_details():
