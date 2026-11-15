@@ -1,5 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["numpy>=2,<3", "soundfile>=0.12,<0.14", "scipy>=1.13,<2"]
 # ///
 """Score a run directory against corpus ground truth. Usage: uv run eval/score.py --run pilot-1 [--split pilot]"""
 

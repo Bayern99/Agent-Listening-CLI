@@ -8,6 +8,10 @@ eval/thresholds.json is committed.
 
 from __future__ import annotations
 
+import os
+
+PAID_TIER = os.environ.get("AGENT_LISTENING_EVAL_PAID_TIER") == "1"
+
 SOURCES = {
     "bach10": {
         "url": "https://github.com/flippy-fyp/Bach10_v1.1 (commit 2a53cdc6495bb82f03f943b77ca3b11ddf7f5a31)",
@@ -27,7 +31,9 @@ SOURCES = {
     },
     "muse": {
         "url": "https://github.com/brandoncarone/MUSE_music_benchmark (commit 2ff5f017413a7776de5283f750349ea1fa0be61d)",
-        "license": "Research/benchmarking only, no training (LICENSE_DATA.md)",
+        "license": "Research/benchmarking only, no training (LICENSE_DATA.md). Run only with a paid-tier key "
+        "(AGENT_LISTENING_EVAL_PAID_TIER=1): free-tier Gemini terms allow Google to use submitted content to "
+        "improve its models.",
         "authority": "Contour label encoded in the stimulus file name by the benchmark authors",
     },
     "sc": {
@@ -529,6 +535,8 @@ def cases() -> list[dict]:
         }
     )
 
+    if not PAID_TIER:
+        return out
     for index, name in enumerate(sorted(MUSE_STIMULI)):
         label = name.removesuffix(".wav").split("_")[2]
         out.append(

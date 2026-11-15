@@ -1,5 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["numpy>=2,<3", "soundfile>=0.12,<0.14", "scipy>=1.13,<2"]
 # ///
 """Run the corpus through the installed `agent-listening` CLI.
 
@@ -33,7 +34,7 @@ def commands(case: dict, condition: str, manifest: dict, cli: str, out: Path) ->
         cmd.append(case["question"])
     if task == "investigate":
         start, end = case["focus"]
-        cmd += ["--focus", f"{start}-{end}", case["question"]]
+        cmd += ["--focus", f"{start}-{end}", "--question", case["question"]]
     if condition == "CB":
         cmd.append("--counterbalance")
     if condition == "H+C":
