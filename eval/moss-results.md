@@ -5,7 +5,9 @@
 This evaluation asks whether MOSS-Music supplies independently checked musical listening gains over
 the stored `gemini-4-hydrogen` holdout. The decision set is the existing holdout, including MUSE
 (`AGENT_LISTENING_EVAL_PAID_TIER=1` enables those existing cases; inference here is local).
-Development uses only pilot cases. The method commit precedes the first MOSS holdout call.
+Development uses only pilot cases. The initial method commit preceded the first MOSS holdout attempt. That SDPA attempt was terminated
+when numerical invalidity was demonstrated. The revised method is committed before the valid decision
+run; the invalid attempt is retained and excluded from capability conclusions.
 No product dependency, contract, threshold, CLI behaviour or SC Agent IDE code changes.
 
 The runner resolves `corpus.py` recipes against `build-manifest.json`, checks the original file hashes,
@@ -40,8 +42,10 @@ The conditions are:
 The prompt uses the same system instructions and task text as Hydrogen, with the existing JSON schema
 written in the user message because Transformers has no constrained JSON response mode here. It asks
 for concise JSON only. Parsing accepts plain JSON or a single `json` code fence, validates the schema,
-and otherwise records failure. There are no retries, output repairs or answer extraction from prose.
-Greedy decoding uses BF16, requested SDPA (the upstream encoder retains eager attention), `do_sample=False`, `num_beams=1`, `max_new_tokens=2048`, `use_cache=True`,
+and otherwise records failure. A logits processor also rejects every generation step with any NaN
+or infinity, before argmax can turn invalid scores into repeated tokens. There are no retries,
+output repairs or answer extraction from prose.
+Greedy decoding uses BF16 and eager attention in both encoder and language model, `do_sample=False`, `num_beams=1`, `max_new_tokens=2048`, `use_cache=True`,
 and seed 0. The encoder retains its upstream batch size of 64 four-second chunks and default MPS allocation
 limits. Unused MPS cache is cleared before each call. This removes sampling randomness; cross-device bitwise determinism is not asserted.
 
@@ -108,7 +112,12 @@ Machine: Apple M4 Max, arm64, 128 GB unified memory. MPS is available. A patch-f
 audio smoke call loaded in 7.10 s and completed in 15.68 s including load. This probe is feasibility
 evidence, not a scored listening case. There is no HF_TOKEN environment value or saved HF token;
 HF Jobs was not used. External service charge is zero; electricity and hardware amortisation are
-unmeasured. CPU fallback is unnecessary after successful MPS inference.
+unmeasured. MPS SDPA later proved numerically invalid on a longer pair. Eager attention passed the same
+four-step diagnostic and a complete 418.5 s pilot input (117 generated tokens, every step finite,
+42.15 s). Its sampled peak was 127.21 GB MPS driver allocation, 26.48 GB live tensor allocation and
+2.44 GB process RSS high-water. Driver allocation includes caches and must not be summed with RSS
+as physical usage. The first smoke test was insufficient because it did not check cached-step
+logits. CPU fallback is unnecessary if this eager path remains valid.
 
 `hf download OpenMOSS-Team/MOSS-Music-8B-Instruct` resolved the existing cache. All 24 files passed
 remote size and available digest checks (LFS SHA256; Git blob SHA1 for other files), totalling
@@ -120,13 +129,17 @@ git; the runner rejects a different source commit or tracked local patch.
 From the product checkout, using the isolated interpreter:
 
 ```sh
+export AGENT_LISTENING_EVAL_DIR="${AGENT_LISTENING_EVAL_DIR:-$HOME/.cache/agent-listening-eval}"
+git clone https://github.com/OpenMOSS/MOSS-Music "$AGENT_LISTENING_EVAL_DIR/MOSS-Music"
+git -C "$AGENT_LISTENING_EVAL_DIR/MOSS-Music" checkout ad107c7ddaa06de168a0dfbc18d3e1e6a40c0e5e
 uv venv --python 3.12 "$AGENT_LISTENING_EVAL_DIR/moss-venv"
 uv pip install --python "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
   -r eval/moss-requirements.txt
 hf download OpenMOSS-Team/MOSS-Music-8B-Instruct --revision fce7f8304e96cc2d3398b8106456cbb2ecec3139
 AGENT_LISTENING_EVAL_PAID_TIER=1 "$AGENT_LISTENING_EVAL_DIR/moss-venv/bin/python" \
-  eval/moss.py --split holdout --run moss-holdout-1
-AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/score.py --run moss-holdout-1 --split holdout
+  eval/moss.py --split holdout --run moss-holdout-2
+AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/score.py --run moss-holdout-2 --split holdout
+AGENT_LISTENING_EVAL_PAID_TIER=1 uv run eval/moss_score.py --run moss-holdout-2
 uv run --with scipy python -m pytest -q eval/test_moss.py
 ```
 
@@ -136,9 +149,12 @@ run may resume the same directory; completed raw calls are reused, including par
 
 ## Results
 
-Pilot: 15 completed raw calls, zero JSON/schema failures, across 8 selected pilot cases plus a
+Historical SDPA pilot (execution/format evidence, not a numerically validated capability result):
+15 completed raw calls, zero JSON/schema failures, across 8 selected pilot cases plus a
 counterbalance and identical-model control. H detection was 0/3; focused detection was 0/3; choice
 accuracy was 2/4. The near-null and identical-model controls returned no differences. Repeating the
 same AB prompt in the counterbalance call produced exactly the same text. Prompt and scoring
-thresholds were not changed after these observations. The held-out decision results follow below
-after the method commit.
+thresholds were not changed after these observations. The original `runs/moss-holdout-1` attempt produced nonfinite logits (151,936/151,936
+at generation step 1) and is invalid for capability comparisons; see `runs/moss-feasibility/logits-mps.json`.
+The eager diagnostic is `logits-mps-eager.json`; revised pilot output is in `runs/moss-pilot-4-eager`.
+The held-out decision results follow below after the revised method commit.

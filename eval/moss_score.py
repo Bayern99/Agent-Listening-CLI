@@ -41,6 +41,10 @@ def main() -> None:
     root = EVAL_DIR / "runs" / args.run
     baseline = EVAL_DIR / "runs" / args.baseline
     cases = [c for c in corpus.cases() if c["split"] == "holdout"]
+    baseline_summary = load(baseline / "summary-holdout.json")
+    expected = baseline_summary["scored"] + len(baseline_summary["missing"]) + len(baseline_summary["failed"])
+    if sum(len(c["conditions"]) for c in cases) != expected:
+        raise ValueError("Corpus differs from baseline; set AGENT_LISTENING_EVAL_PAID_TIER=1 for MUSE")
     focused, pairs, missing, failed, identical, cb_cases = [], [], [], [], [], []
     for case in cases:
         for condition in case["conditions"]:

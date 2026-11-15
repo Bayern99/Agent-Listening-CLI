@@ -61,6 +61,12 @@ def chat_prompt(built: prompts.ListeningPrompt, labels: list[str]) -> str:
     )
 
 
+def finite_logits(input_ids, scores):
+    if not scores.isfinite().all().item():
+        raise ValueError("NONFINITE_LOGITS: inference is numerically invalid")
+    return scores
+
+
 class Model:
     def __init__(self, source: Path, weights: Path, device: str):
         import torch
@@ -72,7 +78,7 @@ class Model:
         revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
         if revision != SOURCE_REVISION:
             raise ValueError("unexpected MOSS source revision")
-        if subprocess.check_output(["git", "-C", str(source), "diff", "--name-only"]):
+        if subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--name-only"]):
             raise ValueError("MOSS source has local patches")
         self.torch, self.device = torch, device
         torch.manual_seed(0)
@@ -83,7 +89,7 @@ class Model:
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
             device_map=device,
-            attn_implementation="sdpa",
+            attn_implementation="eager",
         ).eval()
         self.processor = MossMusicProcessor.from_pretrained(str(weights), enable_time_marker=True)
         self.load_s = time.monotonic() - started
@@ -105,11 +111,12 @@ class Model:
             "dtype": "bfloat16",
             "encoder_conv_chunksize": self.model.audio_encoder.conv_chunksize,
             "attention": {
-                "requested": "sdpa",
+                "requested": "eager",
                 "language": self.model.language_model.config._attn_implementation,
                 "encoder": self.model.config.audio_config._attn_implementation,
             },
             "generation": GENERATION,
+            "finite_logits_checked": True,
             "seed": 0,
             "mps_memory_fraction": "torch default",
             "mps_recommended_bytes": torch.mps.recommended_max_memory() if self.device == "mps" else None,
@@ -174,7 +181,7 @@ class Model:
             encoded["audio_data"] = encoded["audio_data"].to(self.model.dtype)
             encoded["audio_input_mask"] = encoded["input_ids"] == self.processor.audio_token_id
             with torch.inference_mode():
-                ids = self.model.generate(**encoded, **GENERATION)
+                ids = self.model.generate(**encoded, **GENERATION, logits_processor=[finite_logits])
             if self.device == "mps":
                 torch.mps.synchronize()
             output = ids[0, record["input_tokens"] :]
