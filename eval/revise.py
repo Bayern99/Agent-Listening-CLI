@@ -32,26 +32,31 @@ SCENARIOS = {
         "goal": "The high bell-like melody that opens the piece must stay clearly in front of the other two voices.",
         "defect": {"v1Amp": 0.05},
         "target": {"v1Amp": [0.15, None]},
+        "control": {"v1Amp": 0.3},
     },
     "detuned-bass": {
         "goal": "All three voices should sound in tune with one another.",
         "defect": {"v3Detune": 45},
         "target": {"v3Detune": [-10, 10]},
+        "control": {},
     },
     "collapsed-entries": {
         "goal": "The three voices should enter one after another as a clear canon, each entry audible on its own.",
         "defect": {"v2Delay": 0.0, "v3Delay": 0.0},
         "target": {"v2Delay": [1.0, None], "v3Delay_minus_v2Delay": [1.0, None]},
+        "control": {},
     },
     "struck-bell": {
         "goal": "The high voice should swell in gently, without a hard strike at the start of each note.",
         "defect": {"v1Attack": 0.002},
         "target": {"v1Attack": [0.05, None]},
+        "control": {"v1Attack": 0.12},
     },
     "whistling-middle": {
         "goal": "The middle voice should sound warm and smooth, without a whistling resonance.",
         "defect": {"v2Res": 3.0},
         "target": {"v2Res": [None, 0.5]},
+        "control": {},
     },
 }
 
@@ -172,6 +177,7 @@ def main() -> None:
     env["GEMINI_API_KEY"] = Path(os.environ["AGENT_LISTENING_EVAL_KEY_FILE"]).read_text().strip()
 
     prepared = {}
+    controls: dict[str, dict] = {}
     for name, scenario in SCENARIOS.items():
         params = {**corpus.SC_BASE, **scenario["defect"]}
         wav = build({"op": "sc-canon", "params": params})
@@ -187,6 +193,17 @@ def main() -> None:
                 timeout=1800,
             )
         prepared[name] = (params, wav.with_suffix(".scd").read_text(), json.loads(evidence_path.read_text()))
+        control_wav = build({"op": "sc-canon", "params": {**corpus.SC_BASE, **scenario["control"]}})
+        control_path = out_dir / f"{name}.control-review.json"
+        if not control_path.exists():
+            subprocess.run(
+                [args.cli, "review", str(control_wav), "--brief", str(brief), "--out", str(control_path)],
+                env=env,
+                check=False,
+                capture_output=True,
+                timeout=1800,
+            )
+        controls[name] = json.loads(control_path.read_text())
 
     jobs = [
         (name, condition, rep)
@@ -236,6 +253,17 @@ def main() -> None:
             ),
             "by_scenario": {n: [r["success"] for r in group if r["scenario"] == n] for n in SCENARIOS},
         }
+
+    def verdicts(evidence: dict) -> list[str]:
+        return [a["verdict"] for a in evidence.get("assessments", [])]
+
+    summary["review_goal_verdicts"] = {
+        n: {"defect": verdicts(prepared[n][2]), "control": verdicts(controls[n])} for n in SCENARIOS
+    }
+    flagged = [v != "met" for n in SCENARIOS for v in verdicts(prepared[n][2])]
+    false_alarm = [v in ("not-met", "partly") for n in SCENARIOS for v in verdicts(controls[n])]
+    summary["review_defect_flagged"] = wilson(sum(flagged), len(flagged))
+    summary["review_control_false_alarm"] = wilson(sum(false_alarm), len(false_alarm))
     summary["difference_listening_minus_code"] = newcombe(
         summary["code+listening"]["success"], summary["code"]["success"]
     )
