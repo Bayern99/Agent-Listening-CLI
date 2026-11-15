@@ -1,0 +1,23 @@
+{
+  "registered": "after pilot-3 (wheel sha256 c61e1fd24079a4bbb2f9a61bf35eda39ed0b30a3d22f26f6cc0ac9282a33925e), before any holdout run",
+  "pilot_basis": "pilot-3: aspect-correct change detection 0/7, deterministic onset Hit@3s 7/7, choice accuracy 12/13 (MUSE contour 6/6), near-null hallucinated differences 0/1, identical pairs 0 model calls",
+  "added_after_pilot": ["change/*.located_any_aspect: model difference claim overlapping the true region within 3 s, any aspect"],
+  "criteria": [
+    {"id": "identical-no-model-call", "metric": "identical/H.model_calls", "op": "==", "value": 0, "kind": "hard"},
+    {"id": "identical-no-claims", "metric": "identical/H.claims", "op": "==", "value": 0, "kind": "hard"},
+    {"id": "nearnull-no-surviving-difference", "metric": "null/H.uncontradicted_differs_claims", "op": "==", "value": 0, "kind": "hard"},
+    {"id": "misleading-context-no-surviving-claim", "metric": "null/MC.uncontradicted_differs_claims", "op": "==", "value": 0, "kind": "hard"},
+    {"id": "deterministic-localization", "metric": "change/H.deterministic_onset_hit3.rate", "op": ">=", "value": 0.95, "kind": "target"},
+    {"id": "false-positives-after-checks", "metric": "change/H.false_positive_after_checks_per_case", "op": "<=", "value": 0.25, "kind": "target"},
+    {"id": "model-change-detection", "metric": "change/H.detection.rate", "op": ">=", "value": 0.5, "kind": "target",
+     "note": "level at which listening alone would be a useful change detector; pilot predicts failure"},
+    {"id": "model-change-located", "metric": "change/H.located_any_aspect.rate", "op": ">=", "value": 0.5, "kind": "target"},
+    {"id": "choice-accuracy", "metric": "choice/H.accuracy.rate", "op": ">=", "value": 0.7, "kind": "target"},
+    {"id": "choice-above-chance", "metric": "choice/H.accuracy.ci95.0", "op": ">", "ref": "choice/H.mean_chance", "kind": "target"},
+    {"id": "muse-contour", "metric": "choice/H.by_family.muse.rate", "op": ">=", "value": 0.75, "kind": "target"},
+    {"id": "nearnull-raw-hallucination", "metric": "null/H.cases_with_hallucinated_difference.rate", "op": "<=", "value": 0.34, "kind": "report"},
+    {"id": "counterbalance-order-consistency", "metric": "change/CB.order_consistency.rate", "op": ">=", "value": 0.6, "kind": "report"},
+    {"id": "revision-listening-benefit", "metric": "revision.difference_listening_minus_code.ci95.0", "op": ">", "value": 0.0, "kind": "target",
+     "note": "usefulness counts as demonstrated only if the lower 95% bound of the success-rate difference is above zero"}
+  ]
+}

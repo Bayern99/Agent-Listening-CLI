@@ -6,7 +6,20 @@ machine-generated evidence into human listening approval.
 
 ## [Unreleased]
 
-No unreleased changes.
+### 1.0.0 (not yet released)
+
+A full rewrite. Agent Listening now listens with a native audio model instead of fusing offline MIR
+extractors.
+
+- New commands: `hear`, `ask`, `compare`, `investigate`, `review`, `identify`, `check`, `doctor`.
+- New evidence contract `agent-listening/evidence` v1 (`src/agent_listening/evidence-1.schema.json`)
+  replaces the `agent-listening/0.2` receipt, Music IR 0.2 and JAMS output.
+- Listening via `gemini-4-hydrogen` through the pinned `gemini-api` 0.4.x CLI; deterministic PCM identity
+  and signal-difference checks derive every claim's status.
+- Removed: Essentia, all-in-one, Demucs, Basic Pitch, JAMS, the `src` package, analysis modes and profiles.
+- Migration: SC Agent IDE ≤ 1.9.1 accepts only 0.2 receipts; keep `agent-listening` 0.2.0 installed for
+  those releases or upgrade SC Agent IDE to a version whose `check-analysis.mjs` accepts `--evidence`.
+  See docs/architecture.md §6.
 
 ## [0.2.0] - 2026-08-30
 

@@ -10,43 +10,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version-file: pyproject.toml
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.10.0"
-      - run: uv sync --locked
-      - run: uv run python -m unittest discover -v
-      - run: uv run python -m compileall -q src tests
-      - run: uv lock --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked --python 3.11
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy src
+      - run: uv run lint-imports
+      - run: uv run pytest -q
       - name: Build distribution
         run: uv build
       - name: Install and smoke the wheel outside the checkout
         shell: bash
         run: |
-          uv pip install --python .venv/bin/python --no-deps dist/*.whl
+          uv venv /tmp/al-smoke-venv --python 3.11
+          uv pip install --python /tmp/al-smoke-venv/bin/python dist/*.whl
           smoke_dir=$(mktemp -d)
           cd "$smoke_dir"
-          export PATH="$GITHUB_WORKSPACE/.venv/bin:$PATH"
-          test "$(agent-listening --version)" = "agent-listening 0.2.0"
-          agent-listening doctor --analysis-mode solo --json > doctor-solo.json
-          agent-listening doctor --analysis-mode full_mix --json > doctor-full.json
-          agent-listening build-ir \
-            --allin1 "$GITHUB_WORKSPACE/tests/fixtures/allin1_sample.json" \
-            --essentia "$GITHUB_WORKSPACE/tests/fixtures/essentia_sample.json" \
-            --track-id installed-smoke \
-            --output-dir "$smoke_dir/output" \
-            --json > receipt.json
+          /tmp/al-smoke-venv/bin/agent-listening --version
+          /tmp/al-smoke-venv/bin/python - <<'PY'
+          import numpy as np, soundfile as sf
+          t = np.arange(48000) / 48000
+          data = np.repeat((0.2 * np.sin(2 * np.pi * 440 * t))[:, None], 2, axis=1)
+          sf.write("a.wav", data, 48000, subtype="PCM_16")
+          PY
+          /tmp/al-smoke-venv/bin/agent-listening identify a.wav > evidence.json
+          /tmp/al-smoke-venv/bin/agent-listening compare a.wav a.wav > compare.json
           python - <<'PY'
           import json
-          from pathlib import Path
-
-          doctor = json.loads(Path("doctor-solo.json").read_text())
-          assert doctor["status"] == "ready", doctor
-          receipt = json.loads(Path("receipt.json").read_text())
-          assert receipt["status"] == "success", receipt
-          assert Path(receipt["artifacts"]["music_ir"]).is_file()
-          assert Path(receipt["artifacts"]["jams"]).is_file()
-          print("installed wheel smoke passed")
+          ev = json.load(open("compare.json"))
+          assert ev["status"] == "complete", ev
+          assert ev["claims"] == [], ev["claims"]
           PY
+          if /tmp/al-smoke-venv/bin/agent-listening doctor; then
+            echo "doctor unexpectedly ready in CI" && exit 1
+          else
+            code=$?
+            test "$code" -eq 3
+          fi

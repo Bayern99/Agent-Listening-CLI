@@ -1,3 +1,0 @@
-include LICENSE README.md README.zh-CN.md CHANGELOG.md CREDITS.md
-recursive-include profiles *.yaml
-recursive-include schemas *.json
