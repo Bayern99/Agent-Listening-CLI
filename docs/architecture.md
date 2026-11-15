@@ -224,3 +224,58 @@ differences; failures and disagreements are listed, not averaged away.
 Human blind listening (ABX for difference claims, BS.1116-style hidden-reference grading for subtle
 changes, Krippendorff's α across raters) is specified here but not executed in 1.0: it needs recruited
 listeners. Engineering tests passing does not show that music got better.
+
+## 5. Legacy audit (0.2.0, performed after sections 1–4)
+
+0.2.0 was an offline pipeline (`analyze`/`build-ir`/`doctor`) that fused Essentia, all-in-one, Demucs and
+Basic Pitch outputs into JAMS plus a "Music IR" with key, chords, beats and song sections. It had no
+listening model, no comparison, no question answering and no goal review.
+
+| Component | Decision | Reason |
+| --- | --- | --- |
+| `src/` (`core`, `cli`, `fusion/builder`, adapters, `resources`) | Delete | Different product; heavy ML dependencies; Western-centric categories; package named `src` |
+| `schemas/music-ir-*.json`, `profiles/`, JAMS output, demo `jams/` and `music-ir/` | Delete | Replaced by evidence contract v1 |
+| `tests/` and fixtures | Replace | Tested the removed adapters |
+| `CONTEXT.md`, `docs/adr/`, `docs/field-guide.md`, `docs/review-checklist.md`, `.scratch/`, tracked `Research/`, `README.zh-CN.md` | Delete | Superseded; history keeps them; one README and this document replace them |
+| `docs/agents/*` | Replace | Folded into `AGENTS.md` |
+| `bin/agent-listening`, `MANIFEST.in` | Delete | Installed entry point and uv build backend replace them |
+| `pyproject.toml`, `uv.lock`, CI, `AGENTS.md`, `README.md`, `CREDITS.md`, Skill | Replace | New dependency set and product |
+| `LICENSE` (MIT), `CHANGELOG.md` | Keep | Still true; changelog gains 1.0 |
+| sha256 source identity, no-clobber output | Re-derived independently in §3, no code reused | — |
+| `agent-listening/0.2` receipt + `music-ir/0.2` consumed by SC Agent IDE | External compatibility contract | See §6 |
+
+Untracked local research notes and generated outputs in the working tree are user files and are left in
+place, uncommitted.
+
+## 6. SC Agent IDE integration contract
+
+Ownership: SC Agent IDE owns SuperCollider execution, render runs, source revisions, Music Memory, grants
+and human acceptance. Agent Listening owns listening and audio evidence. The only coupling is files:
+the agent runs `agent-listening` on an artifact from a render run and the IDE's helper checks the result.
+No MCP server, runtime or provider dependency is added to the IDE.
+
+Caller audit: the only machine consumer is `skills/sc-agent-ide-grounded/helpers/check-analysis.mjs`
+(with `test/check_analysis.test.ts`); `references/revision-loop.md` documents the 0.2 commands for agents.
+
+New flow (SC Agent IDE with the coordinated update):
+
+```bash
+agent-listening review "$RUN/artifacts/out.wav" --brief brief.json \
+  --before "$PREV_RUN/artifacts/out.wav" \
+  --out "$PROJECT/analysis/$RUN_ID/review.evidence.json"
+node helpers/check-analysis.mjs --project-root "$PROJECT" --run "$RUN_ID" \
+  --artifact "sha256:<hash>" --analysis-root "$PROJECT/analysis/$RUN_ID" \
+  --evidence "$PROJECT/analysis/$RUN_ID/review.evidence.json"
+```
+
+Checker rules for `--evidence`: `schema == "agent-listening/evidence"`, `version == 1`,
+`status != "failed"`; the input whose `role` is `subject` (or `after` for `compare`) must have `sha256`
+equal to both the manifest hash and the freshly computed artifact hash, otherwise `SOURCE_HASH_MISMATCH`;
+a match only on a `before` input fails with `ARTIFACT_ROLE_MISMATCH`. Evidence `limitations` pass through;
+the result keeps the `sc-agent-ide/analysis-check` v1 shape with `versions.evidence`. The `--receipt`
+path for 0.2 stays byte-for-byte unchanged.
+
+Migration: released SC Agent IDE ≤ 1.9.1 only understands 0.2 receipts. Users of those releases keep
+`agent-listening` 0.2.0 (`uv tool install git+https://github.com/Bayern99/Agent-Listening-CLI@v0.2.0`);
+with 1.0 installed the old checker fails loudly (`RECEIPT_VERSION_UNKNOWN`, exit 1), never silently.
+The coordinated SC Agent IDE change accepts both formats, so upgrading the IDE first is always safe.
