@@ -94,6 +94,7 @@ def score_change(evidence: dict, truth: dict) -> dict:
         "onset_error_s": min(errors) if errors else None,
         "onset_hit3": bool(errors) and min(errors) <= HIT_S,
         "overlap_hit": any(overlaps(locus, region, HIT_S) for c in right for locus in c["loci"]),
+        "located_any_aspect": any(overlaps(locus, region, HIT_S) for c in main for locus in c["loci"]),
         "differs_claims": len(main),
         "false_positive_claims": len(false_pos),
         "false_positive_after_checks": sum(c["status"] != "contradicted" for c in false_pos),
@@ -146,10 +147,52 @@ def score_case(evidence: dict, truth: dict) -> dict:
     }
 
 
+def lookup(summary: dict, dotted: str) -> object:
+    value: object = summary
+    for part in dotted.split("."):
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return None
+    return value
+
+
+def evaluate(summary: dict) -> list[dict]:
+    spec = json.loads((Path(__file__).parent / "thresholds.json").read_text())
+    ops = {
+        "==": lambda a, b: a == b,
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b,
+    }
+    out = []
+    for criterion in spec["criteria"]:
+        actual = lookup(summary, criterion["metric"])
+        target = lookup(summary, criterion["ref"]) if "ref" in criterion else criterion["value"]
+        if actual is None or target is None:
+            verdict = "not-measured"
+        else:
+            verdict = "pass" if ops[criterion["op"]](actual, target) else "fail"
+        out.append(
+            {
+                "id": criterion["id"],
+                "kind": criterion["kind"],
+                "actual": actual,
+                "op": criterion["op"],
+                "target": target,
+                "verdict": verdict,
+            }
+        )
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", required=True)
     parser.add_argument("--split", default="all")
+    parser.add_argument("--revision", default="")
     args = parser.parse_args()
     run_dir = EVAL_DIR / "runs" / args.run
 
@@ -216,6 +259,7 @@ def main() -> None:
                     [r["onset_error_s"] for r in results if r["onset_error_s"] is not None]
                 ),
                 "overlap_hit": wilson(sum(r["overlap_hit"] for r in results), len(results)),
+                "located_any_aspect": wilson(sum(r["located_any_aspect"] for r in results), len(results)),
                 "false_positive_claims_per_case": round(
                     statistics.mean(r["false_positive_claims"] for r in results), 2
                 ),
@@ -292,6 +336,10 @@ def main() -> None:
         "estimated_usd": round(cost, 3),
         "estimated_usd_per_audio_minute": round(cost / audio_min, 4),
     }
+    revision = EVAL_DIR / "runs" / args.revision / "summary.json" if args.revision else None
+    if revision and revision.exists():
+        summary["revision"] = json.loads(revision.read_text())
+    summary["criteria"] = evaluate(summary)
     out = run_dir / f"summary-{args.split}.json"
     out.write_text(json.dumps(summary, indent=2))
     (run_dir / f"rows-{args.split}.json").write_text(json.dumps(rows, indent=2))
