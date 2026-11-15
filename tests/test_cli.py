@@ -545,3 +545,80 @@ def test_compare_follow_up_dry_run_skips(tmp_path):
     proc = _run(["compare", str(a), str(b), "--dry-run"], env)
     assert proc.returncode == 0, proc.stderr
     assert not log.exists() or not [e for e in read_log(log) if e["argv"][:1] == ["generate"]]
+
+
+def _tone_mix(seconds=5.0, seed_base=0):
+    """Deterministic three-voice multi-partial mix; seed_base varies start phases."""
+    t = np.arange(int(SR * seconds)) / SR
+
+    def voice(f0, partials, amp, seed):
+        rng = np.random.default_rng(seed)
+        sig = np.zeros_like(t)
+        for h, a_ in enumerate(partials, start=1):
+            sig += a_ * np.sin(2 * np.pi * f0 * h * t + rng.uniform(0, 2 * np.pi))
+        return amp * sig
+
+    mix = (
+        voice(110, [1, 0.5, 0.25, 0.12], 0.15, seed_base * 10 + 1)
+        + voice(220, [1, 0.4, 0.2], 0.12, seed_base * 10 + 2)
+        + voice(375, [1, 0.45, 0.22, 0.35], 0.10, seed_base * 10 + 3)
+    )
+    return np.repeat(mix[:, None], 2, axis=1)
+
+
+def _write_pair(tmp_path, a_data, b_data):
+    a = tmp_path / "a.wav"
+    b = tmp_path / "b.wav"
+    sf.write(str(a), a_data, SR, subtype="PCM_16", format="WAV")
+    sf.write(str(b), b_data, SR, subtype="PCM_16", format="WAV")
+    return a, b
+
+
+def _claim(text, relation, clip="A", start=0.0, end=5.0):
+    return {
+        "text": text,
+        "aspect": "timbre",
+        "scale": "work",
+        "loci": [{"clip": clip, "start": start, "end": end}],
+        "relation": relation,
+        "basis": "audio",
+        "confidence": "high",
+    }
+
+
+def test_compare_phase_only_waveform_global(tmp_path):
+    """Phase re-render: waveform diff is global; spectral is clean, so an
+    'unchanged' claim is consistent and an unsupported 'differs' is contradicted."""
+    a, b = _write_pair(tmp_path, _tone_mix(), _tone_mix(seed_base=1))
+    reply = {
+        "summary": "identical",
+        "claims": [
+            _claim("no audible difference", "unchanged"),
+            _claim("the bass changed", "differs", start=1.0, end=2.0),
+        ],
+    }
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, reply))
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    diff = next(m for m in ev["measurements"] if m["kind"] == "signal-difference")
+    assert diff["result"]["global_change"] is True  # waveform is phase-sensitive
+    assert diff["result"]["spectral"]["regions"] == []
+    by_rel = {c["relation"]: c for c in ev["claims"]}
+    assert by_rel["unchanged"]["status"] == "consistent"
+    assert by_rel["differs"]["status"] == "contradicted"
+
+
+def test_compare_spectral_global_contradicts_unchanged(tmp_path):
+    """Global spectral change (waveshaping): 'unchanged' is contradicted even
+    though the waveform check is inapplicable."""
+    a_data = _tone_mix()
+    a, b = _write_pair(tmp_path, a_data, np.tanh(2.5 * a_data) * 0.8)
+    reply = {"summary": "same", "claims": [_claim("no audible difference", "unchanged")]}
+    env, _ = _env(tmp_path, FAKE_GEMINI_REPLY=_reply(tmp_path, reply))
+    proc = _run(["compare", str(a), str(b)], env)
+    assert proc.returncode == 0, proc.stderr
+    ev = json.loads(proc.stdout)
+    diff = next(m for m in ev["measurements"] if m["kind"] == "signal-difference")
+    assert diff["result"]["spectral"]["global_change"] is True
+    assert ev["claims"][0]["status"] == "contradicted"

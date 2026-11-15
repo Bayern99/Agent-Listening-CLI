@@ -149,6 +149,13 @@ When inputs share a sample rate it measures signal-difference regions (cross-cor
 blockwise residual-to-signal ratio) and contradicts model difference claims that fall outside every measured
 region beyond a tolerance. Global changes make the check inapplicable rather than permissive.
 
+Spectral difference (added after a real SC revision, organ pedal bass "pure" to "drawbars", was
+heard as identical while the waveform residual was global and therefore inapplicable): the waveform residual
+is phase-sensitive, so a re-rendered oscillator with a new start phase "differs" without sounding different.
+`signal-difference` therefore also reports phase-invariant spectral regions (log-magnitude on a 1/12-octave
+grid). "unchanged" claims are contradicted by spectral regions, including global ones; "differs" claims are
+supported by waveform or spectral regions and become inapplicable only when both are global.
+
 Measurement-guided follow-up (added after the pilot, where whole-clip comparison missed audible
 articulation and resonance edits and answered "no perceptible difference"): measured difference regions that
 no `consistent` difference claim covers are re-heard as matching A/B excerpts with the region pointed out

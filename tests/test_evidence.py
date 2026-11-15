@@ -652,7 +652,8 @@ def test_apply_difference_check_boundaries():
     )
     chk = out[0].checks[-1]
     assert (
-        chk.result == "pass" and chk.detail == "locus overlaps a measured difference region (tolerance 2.0s)"
+        chk.result == "pass"
+        and chk.detail == "locus overlaps a measured waveform difference region (tolerance 2.0s)"
     )
     out = evidence.apply_difference_check(
         [claim("differs")],
@@ -810,3 +811,125 @@ def test_locus_in_range_tolerance_and_zero_start():
         _payload([_good_claim(loci=[{"clip": "A", "start": 0.0, "end": 10.6}])]), {"A": clip}
     )
     assert claims[0].checks[0].result == "fail"
+
+
+def _diff_claim(relation, start=0.0, end=2.0):
+    return evidence.make_claim(
+        id="x",
+        origin="model",
+        text="t",
+        aspect="timbre",
+        scale="event",
+        loci=[Locus("A", start, end)],
+        relation=relation,
+        basis="audio",
+        confidence="low",
+    )
+
+
+def test_difference_check_spectral_decision_table():
+    wf_local = {"A": [(5.5, 6.5)], "B": [(5.5, 6.5)]}
+    spec_local = {"A": [(1.0, 2.5)], "B": [(1.0, 2.5)]}
+    spec_far = {"A": [(9.0, 9.5)], "B": [(9.0, 9.5)]}
+
+    # differs: supported by either region set; n/a only when BOTH are global
+    out = evidence.apply_difference_check(
+        [_diff_claim("differs", 1.0, 2.0)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_local,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "consistent"
+    assert "spectral" in out[0].checks[-1].detail
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("differs", 5.6, 6.4)],
+        regions=wf_local,
+        global_change=False,
+        spectral_regions=spec_local,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "consistent"
+    assert "waveform" in out[0].checks[-1].detail
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("differs", 5.6, 6.4)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_far,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "contradicted"  # global waveform regions cannot support
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("differs", 1.0, 2.0)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_local,
+        spectral_global=True,
+        measurement_id="m2",
+    )
+    assert out[0].status == "unchecked"  # both global -> n/a
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("differs", 0.0, 1.0)],
+        regions=wf_local,
+        global_change=False,
+        spectral_regions=spec_far,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "contradicted"
+
+    # unchanged: only spectral regions contradict, even under spectral global;
+    # waveform regions (phase-sensitive) never do
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 0.0, 2.0)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_local,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "contradicted"
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 0.0, 2.0)],
+        regions=wf_local,
+        global_change=True,
+        spectral_regions=spec_local,
+        spectral_global=True,
+        measurement_id="m2",
+    )
+    assert out[0].status == "contradicted"
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 5.5, 6.5)],
+        regions=wf_local,
+        global_change=False,
+        spectral_regions=spec_far,
+        spectral_global=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "consistent"  # waveform region overlap no longer contradicts
+
+    # no spectral data (older measurements): legacy waveform-only behaviour
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 5.5, 6.5)],
+        regions=wf_local,
+        global_change=False,
+        measurement_id="m2",
+    )
+    assert out[0].status == "contradicted"
+
+    out = evidence.apply_difference_check(
+        [_diff_claim("unchanged", 0.0, 2.0)],
+        regions=wf_local,
+        global_change=True,
+        measurement_id="m2",
+    )
+    assert out[0].status == "unchecked"  # waveform global -> n/a as before

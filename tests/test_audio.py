@@ -256,3 +256,119 @@ def test_describe_mono_stereo_unavailable(tmp_path):
     inp = _id(path)
     out = {m.kind: m.result for m in audio.describe(inp, None, ("stereo",))}
     assert out["stereo"]["available"] is False
+
+
+# --- spectral difference (phase-invariant) ---
+
+
+def _voice(f0, partials, amp, seconds, seed):
+    t = np.arange(int(SR * seconds)) / SR
+    rng = np.random.default_rng(seed)
+    sig = np.zeros_like(t)
+    for h, a in enumerate(partials, start=1):
+        sig += a * np.sin(2 * np.pi * f0 * h * t + rng.uniform(0, 2 * np.pi))
+    return amp * sig
+
+
+def _mix(seconds=6.0, v3_seed=3, seed_base=0):
+    """Three-voice multi-partial mix; v3 has a partial at 1500 Hz (375*4)."""
+    v1 = _voice(110, [1, 0.5, 0.25, 0.12], 0.15, seconds, seed_base * 10 + 1)
+    v2 = _voice(220, [1, 0.4, 0.2], 0.12, seconds, seed_base * 10 + 2)
+    v3 = _voice(375, [1, 0.45, 0.22, 0.35], 0.10, seconds, v3_seed)
+    return np.repeat((v1 + v2 + v3)[:, None], 2, axis=1)
+
+
+def _v3(seconds=6.0, seed=3, f0=375.0):
+    return np.repeat(_voice(f0, [1, 0.45, 0.22, 0.35], 0.10, seconds, seed)[:, None], 2, axis=1)
+
+
+def _spectral(tmp_path, a_data, b_data):
+    a = _id(write_wav(tmp_path / "a.wav", a_data, SR), "A", "before")
+    b = _id(write_wav(tmp_path / "b.wav", b_data, SR), "B", "after")
+    return audio.signal_difference(a, b).result
+
+
+def test_spectral_phase_only_no_regions(tmp_path):
+    """Same tones, new oscillator start phases: waveform diff is global, spectral is clean."""
+    res = _spectral(tmp_path, _mix(), _mix(v3_seed=13, seed_base=1))
+    spec = res["spectral"]
+    assert spec["available"] is True
+    assert spec["regions"] == [], spec["regions"]
+    assert spec["global_change"] is False
+
+
+def test_spectral_tiny_noise_no_regions(tmp_path):
+    a = _mix()
+    b = a + 1e-5 * np.random.default_rng(0).standard_normal(a.shape)
+    res = _spectral(tmp_path, a, b)
+    assert res["spectral"]["regions"] == [], res["spectral"]["regions"]
+
+
+def test_spectral_detuned_voice_region(tmp_path):
+    a = _mix()
+    b = a.copy()
+    lo, hi = int(2.0 * SR), int(4.0 * SR)
+    b[lo:hi] += (_v3(f0=375 * 2 ** (50 / 1200), seed=9) - _v3())[lo:hi]
+    res = _spectral(tmp_path, a, b)
+    regions = res["spectral"]["regions"]
+    assert any(r["start"] <= 2.1 and r["end"] >= 3.9 for r in regions), regions
+
+
+def test_spectral_gain_drop_region(tmp_path):
+    a = _mix()
+    b = a.copy()
+    lo, hi = int(2.0 * SR), int(4.0 * SR)
+    b[lo:hi] += (10 ** (-9 / 20) - 1.0) * _v3()[lo:hi]
+    res = _spectral(tmp_path, a, b)
+    assert res["spectral"]["regions"], res["spectral"]
+
+
+def _peaking(x, f0, q, gain_db):
+    a_lin = 10 ** (gain_db / 40)
+    w0 = 2 * np.pi * f0 / SR
+    alpha = np.sin(w0) / (2 * q)
+    b0, b1, b2 = 1 + alpha * a_lin, -2 * np.cos(w0), 1 - alpha * a_lin
+    a0, a1, a2 = 1 + alpha / a_lin, -2 * np.cos(w0), 1 - alpha / a_lin
+    b = np.array([b0, b1, b2]) / a0
+    a = np.array([1, a1 / a0, a2 / a0])
+    y = np.zeros_like(x)
+    for i in range(2, x.shape[0]):
+        y[i] = b[0] * x[i] + b[1] * x[i - 1] + b[2] * x[i - 2] - a[1] * y[i - 1] - a[2] * y[i - 2]
+    return y
+
+
+def test_spectral_eq_boost_region(tmp_path):
+    a = _mix()
+    b = a.copy()
+    lo, hi = int(2.0 * SR), int(4.0 * SR)
+    v3 = _v3()
+    v3_eq = np.repeat(_peaking(v3[:, 0], 1500, 8, 12)[:, None], 2, axis=1)
+    b[lo:hi] += (v3_eq - v3)[lo:hi]
+    res = _spectral(tmp_path, a, b)
+    assert res["spectral"]["regions"], res["spectral"]
+
+
+def _pluck_mix(attack_s, seconds=6.0):
+    v1 = _voice(110, [1, 0.5, 0.25, 0.12], 0.15, seconds, 1)
+    v3 = _voice(375, [1, 0.45, 0.22, 0.35], 0.10, seconds, 3)
+    pluck = np.zeros(int(SR * seconds))
+    for start in np.arange(0, seconds, 1.0):
+        n = int(SR * min(1.0, seconds - start))
+        t = np.arange(n) / SR
+        env = np.minimum(t / attack_s, 1.0) * np.exp(-3 * t)
+        ph = np.sin(2 * np.pi * 220 * t) + 0.4 * np.sin(2 * np.pi * 440 * t)
+        pluck[int(start * SR) : int(start * SR) + n] += 0.15 * env * ph
+    return np.repeat((v1 + pluck + v3)[:, None], 2, axis=1)
+
+
+def test_spectral_attack_change_region(tmp_path):
+    res = _spectral(tmp_path, _pluck_mix(0.010), _pluck_mix(0.150))
+    assert res["spectral"]["regions"], res["spectral"]
+
+
+def test_spectral_identical_inputs(tmp_path):
+    res = _spectral(tmp_path, _mix(), _mix())
+    spec = res["spectral"]
+    assert spec["available"] is True
+    assert spec["regions"] == []
+    assert spec["changed_fraction"] == 0

@@ -620,34 +620,79 @@ def apply_difference_check(
     regions: Mapping[str, Sequence[tuple[float, float]]],
     global_change: bool,
     measurement_id: str,
+    spectral_regions: Mapping[str, Sequence[tuple[float, float]]] | None = None,
+    spectral_global: bool = False,
     tolerance_s: float = DIFFERENCE_TOLERANCE_S,
 ) -> tuple[Claim, ...]:
-    """Cross-check differs/unchanged claims against measured difference regions."""
+    """Cross-check differs/unchanged claims against measured difference regions.
+
+    Waveform regions are phase-sensitive: they support "differs" but never
+    contradict "unchanged". Spectral regions (phase-invariant) do both. With no
+    spectral data (older measurements) only the waveform rules apply."""
 
     def check_for(claim: Claim) -> Check | None:
         if claim.relation not in ("differs", "unchanged"):
             return None
-        if global_change:
-            return Check(
-                DIFFERENCE_CHECK, "n/a", "global change: region check not applicable", measurement_id
-            )
+        spectral = spectral_regions is not None
         if claim.relation == "differs":
-            hit = any(
-                _overlaps(loc.start, loc.end, rs - tolerance_s, re_ + tolerance_s) > 0
-                for loc in claim.loci
-                for rs, re_ in regions.get(loc.input, ())
+            if global_change and (not spectral or spectral_global):
+                return Check(
+                    DIFFERENCE_CHECK,
+                    "n/a",
+                    "global change: region check not applicable",
+                    measurement_id,
+                )
+            # a global region set covers everything and cannot support a
+            # localized "differs"; global spectral still contradicts "unchanged"
+            sets: tuple[tuple[Mapping[str, Sequence[tuple[float, float]]], str], ...] = ()
+            if not global_change:
+                sets += ((regions, "waveform"),)
+            if spectral and not spectral_global:
+                sets += ((spectral_regions or {}, "spectral"),)
+            hit = next(
+                (
+                    name
+                    for region_map, name in sets
+                    for loc in claim.loci
+                    for rs, re_ in region_map.get(loc.input, ())
+                    if _overlaps(loc.start, loc.end, rs - tolerance_s, re_ + tolerance_s) > 0
+                ),
+                None,
             )
-            if hit:
+            if hit is not None:
                 return Check(
                     DIFFERENCE_CHECK,
                     "pass",
-                    f"locus overlaps a measured difference region (tolerance {tolerance_s}s)",
+                    f"locus overlaps a measured {hit} difference region (tolerance {tolerance_s}s)",
                     measurement_id,
                 )
             return Check(
                 DIFFERENCE_CHECK,
                 "fail",
                 f"no measured difference region within {tolerance_s}s of any locus",
+                measurement_id,
+            )
+        if global_change and not spectral:
+            return Check(
+                DIFFERENCE_CHECK, "n/a", "global change: region check not applicable", measurement_id
+            )
+        if spectral:
+            breach = any(
+                _overlaps(loc.start, loc.end, rs, re_) > 0.5
+                for loc in claim.loci
+                for rs, re_ in (spectral_regions or {}).get(loc.input, ())
+            )
+            if breach:
+                return Check(
+                    DIFFERENCE_CHECK,
+                    "fail",
+                    "locus overlaps a measured spectral difference region by >0.5s",
+                    measurement_id,
+                )
+            return Check(
+                DIFFERENCE_CHECK,
+                "pass",
+                "no measured spectral difference region overlaps any locus by >0.5s",
                 measurement_id,
             )
         breach = any(

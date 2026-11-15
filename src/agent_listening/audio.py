@@ -24,6 +24,16 @@ METHOD = "agent-listening.audio/1"
 _HASH_BLOCK = 1 << 20
 _PCM_SUBTYPES = frozenset({"PCM_S8", "PCM_U8", "PCM_16", "PCM_24", "PCM_32"})
 
+_SPECTRAL_WINDOW_S = 0.2
+_SPECTRAL_HOP_S = 0.1
+_SPECTRAL_BAND_MIN_HZ = 60.0
+_SPECTRAL_BAND_MAX_HZ = 16000.0
+_SPECTRAL_BANDS_PER_OCTAVE = 12
+_SPECTRAL_DYNAMIC_DB = 60.0
+_SPECTRAL_CAP_DB = 30.0
+_SPECTRAL_SILENCE_DBFS = -60.0
+_SPECTRAL_THRESHOLD_DB = 3.0
+
 
 class IdentityError(Exception):
     """A source file no longer matches its recorded identity."""
@@ -286,6 +296,85 @@ def _read_frames(path: Path, start: int, frames: int) -> npt.NDArray[Any]:
         return np.asarray(fh.read(frames, dtype="float64", always_2d=True), dtype=np.float64)
 
 
+def _spectral_distances(
+    a_path: Path, b_path: Path, a_start: int, b_start: int, frames: int, sr: int
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
+    """Phase-invariant per-window spectral distance in dB over a 1/12-octave grid."""
+    win = int(_SPECTRAL_WINDOW_S * sr)
+    hop = int(_SPECTRAL_HOP_S * sr)
+    n_win = max(0, (frames - win) // hop + 1)
+    distance = np.zeros(n_win)
+    alive = np.zeros(n_win, dtype=bool)
+    if n_win == 0:
+        return distance, alive
+    fmax = min(_SPECTRAL_BAND_MAX_HZ, sr / 2)
+    n_edges = int(_SPECTRAL_BANDS_PER_OCTAVE * np.log2(fmax / _SPECTRAL_BAND_MIN_HZ)) + 1
+    edge_hz = _SPECTRAL_BAND_MIN_HZ * 2.0 ** (np.arange(n_edges + 1) / _SPECTRAL_BANDS_PER_OCTAVE)
+    edge_hz = edge_hz[edge_hz <= fmax]
+    freqs = np.fft.rfftfreq(win, 1.0 / sr)
+    edge_bins = np.concatenate([np.searchsorted(freqs, edge_hz), [np.searchsorted(freqs, fmax)]])
+    hann = np.hanning(win)
+    silence_rms = 10 ** (_SPECTRAL_SILENCE_DBFS / 20)
+    block = int(10 * sr)
+    per_block = max(1, (block - win) // hop)
+    for base in range(0, n_win, per_block):
+        win_lo = base * hop
+        win_hi = min(frames, (base + per_block - 1) * hop + win)
+        span = win_hi - win_lo
+        a = _read_frames(a_path, a_start + win_lo, span).mean(axis=1)
+        b = _read_frames(b_path, b_start + win_lo, span).mean(axis=1)
+        count = (span - win) // hop + 1
+        for w in range(count):
+            seg = slice(w * hop, w * hop + win)
+            xa, xb = a[seg], b[seg]
+            if float(np.sqrt(np.mean(xa**2))) < silence_rms and float(np.sqrt(np.mean(xb**2))) < silence_rms:
+                continue
+            alive[base + w] = True
+            power_a = np.abs(np.fft.rfft(xa * hann)) ** 2
+            power_b = np.abs(np.fft.rfft(xb * hann)) ** 2
+            cum_a = np.concatenate(([0.0], np.cumsum(power_a)))
+            cum_b = np.concatenate(([0.0], np.cumsum(power_b)))
+            level_a = 10 * np.log10(np.maximum(cum_a[edge_bins[1:]] - cum_a[edge_bins[:-1]], 1e-30))
+            level_b = 10 * np.log10(np.maximum(cum_b[edge_bins[1:]] - cum_b[edge_bins[:-1]], 1e-30))
+            top = max(float(level_a.max()), float(level_b.max()))
+            considered = np.maximum(level_a, level_b) > top - _SPECTRAL_DYNAMIC_DB
+            deltas = np.minimum(np.abs(level_a - level_b), _SPECTRAL_CAP_DB)[considered]
+            distance[base + w] = float(deltas.mean()) if deltas.size else 0.0
+    return distance, alive
+
+
+def _spectral_result(
+    a_path: Path, b_path: Path, a_start: int, b_start: int, frames: int, sr: int
+) -> dict[str, object]:
+    """Phase-invariant spectral difference regions in A's time base."""
+    distance, alive = _spectral_distances(a_path, b_path, a_start, b_start, frames, sr)
+    marked = (distance > _SPECTRAL_THRESHOLD_DB) & alive
+    raw = _merge_regions(
+        marked,
+        sr,
+        _SPECTRAL_HOP_S,
+        0.25,
+        distance,
+        offset_s=a_start / sr,
+        win_s=_SPECTRAL_WINDOW_S,
+    )
+    regions = [{"start": round(r[0], 3), "end": round(r[1], 3), "peak_db": round(r[2], 1)} for r in raw]
+    live = int(alive.sum())
+    changed = int(marked.sum())
+    changed_fraction = changed / live if live else 0.0
+    return {
+        "available": True,
+        "window_s": _SPECTRAL_WINDOW_S,
+        "hop_s": _SPECTRAL_HOP_S,
+        "grid": "1/12-octave 60 Hz-16 kHz",
+        "threshold_db": _SPECTRAL_THRESHOLD_DB,
+        "regions": regions,
+        "changed_fraction": round(changed_fraction, 3),
+        "max_distance_db": round(float(distance.max()) if distance.size else 0.0, 1),
+        "global_change": changed_fraction > 0.8,
+    }
+
+
 def _merge_regions(
     masked: npt.NDArray[Any],
     sr: int,
@@ -293,6 +382,7 @@ def _merge_regions(
     merge_gap_s: float,
     ratio: npt.NDArray[Any],
     offset_s: float = 0.0,
+    win_s: float = 0.1,
 ) -> list[tuple[float, float, float]]:
     regions: list[tuple[float, float, float]] = []
     gap_limit = round(merge_gap_s / hop_s)
@@ -303,19 +393,24 @@ def _merge_regions(
             current.append(int(idx))
         else:
             if current:
-                regions.append(_region_span(current, sr, hop_s, ratio, offset_s))
+                regions.append(_region_span(current, sr, hop_s, ratio, offset_s, win_s))
             current = [int(idx)]
         last_idx = int(idx)
     if current:
-        regions.append(_region_span(current, sr, hop_s, ratio, offset_s))
+        regions.append(_region_span(current, sr, hop_s, ratio, offset_s, win_s))
     return regions
 
 
 def _region_span(
-    indices: Sequence[int], sr: int, hop_s: float, ratio: npt.NDArray[Any], offset_s: float
+    indices: Sequence[int],
+    sr: int,
+    hop_s: float,
+    ratio: npt.NDArray[Any],
+    offset_s: float,
+    win_s: float,
 ) -> tuple[float, float, float]:
     start = offset_s + indices[0] * hop_s
-    end = offset_s + indices[-1] * hop_s + 0.1
+    end = offset_s + indices[-1] * hop_s + win_s
     peak = float(ratio[indices].max())
     return start, end, peak
 
@@ -340,6 +435,7 @@ def signal_difference(a: Input, b: Input) -> Measurement:
             result={
                 "available": False,
                 "reason": f"sample rates differ ({a.format.sample_rate} vs {b.format.sample_rate})",
+                "spectral": {"available": False},
             },
         )
     sr = a.format.sample_rate
@@ -401,6 +497,7 @@ def signal_difference(a: Input, b: Input) -> Measurement:
     changed = int(marked.sum())
     changed_fraction = changed / live if live else 0.0
     max_ratio = float(ratio.max()) if ratio.size else 0.0
+    spectral = _spectral_result(Path(a.path), Path(b.path), a_start, b_start, frames, sr)
     return Measurement(
         id="signal-difference",
         kind="signal-difference",
@@ -415,6 +512,7 @@ def signal_difference(a: Input, b: Input) -> Measurement:
             "changed_fraction": round(changed_fraction, 3),
             "max_ratio_db": round(max_ratio, 1),
             "global_change": changed_fraction > 0.8,
+            "spectral": spectral,
         },
     )
 

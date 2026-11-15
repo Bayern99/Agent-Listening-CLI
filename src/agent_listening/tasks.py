@@ -432,14 +432,31 @@ def _run_single(
 
 def _difference_regions(
     measurement: Measurement | None,
-) -> tuple[Mapping[str, Sequence[tuple[float, float]]], bool]:
-    """Regions per input label in each input's own time base."""
+) -> tuple[
+    Mapping[str, Sequence[tuple[float, float]]],
+    bool,
+    Mapping[str, Sequence[tuple[float, float]]] | None,
+    bool,
+]:
+    """Waveform and spectral regions per input label, each in its own time base."""
     if measurement is None or not measurement.result.get("available"):
-        return {}, False
+        return {}, False, None, False
     lag = float(measurement.result.get("lag_s", 0.0))
     a_regions = [(float(r["start"]), float(r["end"])) for r in measurement.result.get("regions", [])]
     b_regions = [(s + lag, e + lag) for s, e in a_regions]
-    return {"A": a_regions, "B": b_regions}, bool(measurement.result.get("global_change"))
+    spectral: Mapping[str, Sequence[tuple[float, float]]] | None = None
+    spectral_global = False
+    spec = measurement.result.get("spectral")
+    if isinstance(spec, dict) and spec.get("available"):
+        a_spec = [(float(r["start"]), float(r["end"])) for r in spec.get("regions", [])]
+        spectral = {"A": a_spec, "B": [(s + lag, e + lag) for s, e in a_spec]}
+        spectral_global = bool(spec.get("global_change"))
+    return (
+        {"A": a_regions, "B": b_regions},
+        bool(measurement.result.get("global_change")),
+        spectral,
+        spectral_global,
+    )
 
 
 def compare(
@@ -476,7 +493,7 @@ def compare(
         )
     diff = audio.signal_difference(inputs[0], inputs[1])
     measurements.append(diff)
-    regions, global_change = _difference_regions(diff)
+    regions, global_change, spectral_regions, spectral_global = _difference_regions(diff)
     extra: list[str] = [] if diff.result.get("available") else [LIM_DIFF_UNAVAILABLE]
     transports = _transports(inputs, options, {})
     clips = {inp.label: _clip_info(inp, tr) for inp, tr in zip(inputs, transports, strict=True)}
@@ -491,7 +508,12 @@ def compare(
         numbered = _renumber(measurements)
         diff_id = numbered[1].id
         return evidence.apply_difference_check(
-            claims, regions=regions, global_change=global_change, measurement_id=diff_id
+            claims,
+            regions=regions,
+            global_change=global_change,
+            measurement_id=diff_id,
+            spectral_regions=spectral_regions,
+            spectral_global=spectral_global,
         )
 
     def follow_ups(
@@ -556,7 +578,12 @@ def compare(
                 reply.payload, clip_infos, id_prefix=f"f{n}_"
             )
             run_claims = evidence.apply_difference_check(
-                run_claims, regions=regions, global_change=False, measurement_id=diff_id
+                run_claims,
+                regions=regions,
+                global_change=False,
+                measurement_id=diff_id,
+                spectral_regions=spectral_regions,
+                spectral_global=spectral_global,
             )
             guided = evidence.Check(
                 name="measurement-guided",
@@ -605,7 +632,12 @@ def compare(
             return None, (), (), ""
         run_claims, run_problems = evidence.claims_from_model(reply.payload, clips, id_prefix=prefix)
         run_claims = evidence.apply_difference_check(
-            run_claims, regions=regions, global_change=global_change, measurement_id=diff_id
+            run_claims,
+            regions=regions,
+            global_change=global_change,
+            measurement_id=diff_id,
+            spectral_regions=spectral_regions,
+            spectral_global=spectral_global,
         )
         return reply, run_claims, tuple(run_problems), str(reply.payload.get("summary") or "")
 
@@ -794,6 +826,8 @@ def review(
     measurements: list[Measurement] = []
     regions: Mapping[str, Sequence[tuple[float, float]]] = {}
     global_change = False
+    spectral_regions: Mapping[str, Sequence[tuple[float, float]]] | None = None
+    spectral_global = False
     identical = False
     extra: list[str] = []
     if before is not None:
@@ -805,7 +839,7 @@ def review(
         else:
             diff = audio.signal_difference(inputs[0], inputs[1])
             measurements.append(diff)
-            regions, global_change = _difference_regions(diff)
+            regions, global_change, spectral_regions, spectral_global = _difference_regions(diff)
             if not diff.result.get("available"):
                 extra.append(LIM_DIFF_UNAVAILABLE)
     transports = _transports(inputs, options, {})
@@ -825,7 +859,12 @@ def review(
         out = evidence.apply_identity_check(claims, identical=identical, measurement_id=numbered[0].id)
         if len(numbered) > 1:
             out = evidence.apply_difference_check(
-                out, regions=regions, global_change=global_change, measurement_id=numbered[1].id
+                out,
+                regions=regions,
+                global_change=global_change,
+                measurement_id=numbered[1].id,
+                spectral_regions=spectral_regions,
+                spectral_global=spectral_global,
             )
         return out
 
