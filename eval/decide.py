@@ -233,7 +233,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", required=True)
     parser.add_argument("--cli", required=True, help="installed agent-listening executable")
-    configured = os.environ.get("AGENT_LISTENING_GEMINI_API", "gemini-api")
+    configured = os.environ.get("AGENT_LISTENING_GEMINI_API") or "gemini-api"
     parser.add_argument("--gemini-api", default=configured, help="provider executable passed to the CLI")
     parser.add_argument("--caller-api", default="gemini-api", help="provider executable for the caller agent")
     parser.add_argument("--only", choices=CONDITIONS, help="run one condition, e.g. source for calibration")
