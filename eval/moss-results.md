@@ -1,5 +1,13 @@
 # MOSS-Music comparative listening evaluation
 
+Status: a preserved negative result. The frozen Transformers/MPS method below does not enter the product.
+That is a decision under this method and evidence (research baseline `agent-listening-1.0` at
+`a58f45581ff9dad441b137a425fc38484bade6d6`), not a verdict on the model: a new model version, another runtime
+or output method, or evidence from a specific task is a reason to evaluate again. The decision and how these
+metrics should be read are in [docs/architecture.md §4.2 and §4.3](../docs/architecture.md#42-how-to-read-these-results).
+The comparison uses the holdout that development has already seen, so it diagnoses this method and does not
+measure either model on unseen material.
+
 MOSS-Music-8B-Instruct does **not demonstrate an independently verifiable listening gain** for Agent Listening in this frozen Transformers/MPS evaluation. It offers three isolated multiple-choice wins and avoids the one misleading-context false positive, but supplies no scored change identification, loses substantially on the choice set, and has material output-format and deployment failures. This conclusion applies to the pinned implementation and method below; it does not establish the model's intrinsic limit under SGLang/CUDA or another prompt.
 
 **1. MOSS vs Hydrogen on identical tasks**

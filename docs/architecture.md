@@ -1,17 +1,45 @@
 # Agent Listening 1.0 — Architecture and Acceptance Criteria
 
-This is the single authoritative design document. It was written from first principles before the
-0.x implementation was audited; the legacy audit and migration live in the last two sections.
-Executable checks (`tests/`, `pyproject.toml` lint and import contracts) outrank this prose.
+This is the single authoritative design document and the place where results are interpreted. It was
+written from first principles before the 0.x implementation was audited; the legacy audit and migration
+live in the last two sections. Executable checks (`tests/`, `pyproject.toml` lint and import contracts)
+outrank this prose.
 
-## 1. Problem
+Each statement here is one of four kinds, and the sections keep them apart: long-term aim (§1),
+implemented behaviour (§3), current evidence (§4.1 to §4.3), open question (§4.4).
 
-A composing agent working in SuperCollider cannot hear. It needs, about real rendered audio:
+| Line | State |
+| --- | --- |
+| Research baseline | branch `agent-listening-1.0` at `a58f45581ff9dad441b137a425fc38484bade6d6` (package version 1.0.0, draft PR #10). All results in §4 were produced on this line. |
+| Mainline | `main` at `b3ae2b2d5eccc19b0fc3fc579be4bc8f07918852`, still the 0.2.0 offline pipeline. |
+| Published release | `v0.2.0` only. 1.0.0 has no tag and no release. |
 
-1. perceptual descriptions grounded in time (what sounds where, at event, phrase, section and work scale);
-2. answers to targeted questions;
-3. what changed between two versions, and where;
-4. whether a render meets explicit artistic goals and keeps protected musical relationships.
+## 1. Product and problem
+
+Agent Listening is a standalone music listening tool for agents that compose and analyse music. A caller
+puts a question to real audio and gets back auditory observations that carry a time position, can be
+followed up, can be compared, and can be checked against other evidence. Their purpose is to help the
+caller form and revise musical choices. SC Agent IDE is the first important integration, not the
+product boundary.
+
+Long-term scope: sound events, voices and texture, the continuation and transformation of material,
+sections and long-range structure. Instrumental, polyphonic, electroacoustic, free-rhythm and non-12-TET
+material are all working objects. Audio can be the only input; source code, scores, target material and
+neutral text hints are supplied when the question needs them. The model, commands and schema described
+below are the current implementation, and a well-founded product finding may change them.
+
+Current focus: make observations and answers usable in concrete musical tasks, and find out how sound
+information changes the caller's next decision. The five tasks keep their purposes:
+
+1. `hear`: perceptual description grounded in time (event, phrase, section and work scale);
+2. `ask`: an answer to a targeted question;
+3. `compare`: what changed between two versions, and where;
+4. `investigate`: a close look at one span, with measurements;
+5. `review`: whether a render meets explicit artistic goals and keeps protected musical relationships.
+
+Multiple-choice questions, difference localization and controlled-edit evaluation each serve part of this
+problem. They are instruments, not the definition of the product, which keeps exploring wider musical
+relations and material understanding.
 
 The dominant failure modes are not missing features but untrustworthy evidence: claims about
 differences that do not exist, wrong timestamps, claims about properties the model cannot perceive,
@@ -34,7 +62,7 @@ and the `gemini-api` v0.4.5 CLI (`--usage`, `generate --schema`, dry runs):
 | `AudioContent` has no offset/clipping fields | Focused listening requires physically excerpting audio and mapping times back. |
 | `analyze` has no structured-output flag; `generate` accepts repeatable `-i` plus `--body` with `response_format` (JSON Schema subset) and `generation_config.thinking_level` (`minimal`/`low`/`medium`/`high` in v0.4.5) | Use `gemini-api generate` for all listening calls. |
 | Exit codes 0 ok, 1 runtime/API, 2 usage, 3 auth; `--agent-mode` gives JSON errors on stderr | Adapter maps these without parsing prose. |
-| Observed latency ≈ 90 s per short request (low and high thinking alike, 2026-11-15) | Listening is expensive in wall time; never run it implicitly, run evaluation cases concurrently. |
+| First probes took ≈ 90 s per short request (low and high thinking alike, 2026-11-15); the holdout later measured much shorter calls (§4.1 latency) | Listening costs wall time and varies between runs; never run it implicitly, run evaluation cases concurrently. |
 
 A first probe (440 Hz + 660 Hz sine dyad) was described as "F4 and A4" (actual A4 and E5):
 absolute pitch naming must not be trusted without measurement.
@@ -94,6 +122,7 @@ downloads; SALAMI targets popular-song section labels; MusTBench audio is Slakh/
 | mir_eval | Onset/segment metrics | Not selected: the needed metrics (absolute error, Hit@k, IoU) are a few lines | — |
 | Partitura, music21, Sync Toolbox | Score parsing and score-audio alignment | Deferred: no 1.0 task needs automatic alignment; score facts are hand-derived for a few cases | Revisit when a task needs aligned symbolic evidence |
 | Essentia, all-in-one, Basic Pitch, Demucs | Beat/key/section labels, transcription, separation | Not selected: heavy ML stacks, Western-centric categories; no measured benefit for the five tasks | Re-admit only with an evaluation showing improvement |
+| MOSS-Music-8B-Instruct, frozen Transformers/MPS method | Second listening model | Not in the product (§4.3) | `eval/moss-results.md`; runtime pinned in `eval/moss-requirements.txt`, outside product dependencies |
 | Hypothesis | Property and stateful tests | Selected | — |
 | Ruff, mypy, Import Linter, AST rule tests | Static enforcement | Selected | CI |
 | mutmut | Mutation testing of the evidence core | Selected (manual run) | Mutation score reported |
@@ -111,7 +140,10 @@ downloads; SALAMI targets popular-song section labels; MusTBench audio is Slakh/
   content-addressed cache.
 - **Context**: symbolic or textual material supplied by the caller (SuperCollider source, score text,
   notes), recorded with its hash.
-- **Brief**: human goals and protected relationships for `review`.
+- **Brief**: human goals and protected relationships for `review`. The contract records the brief's path
+  and hash but no author, so attribution is the caller's job: a brief holds what a person stated, and a
+  creative hypothesis proposed by an agent stays labelled as the agent's (as an `ask` or `compare` question,
+  or in the caller's own records).
 - **Measurement**: a deterministic result (PCM identity, signal difference regions, level, spectrum,
   stereo, onsets) with method and parameters.
 - **Claim**: one statement with `origin` (model, measurement, human), `aspect`, `scale`, `loci`
@@ -122,6 +154,21 @@ downloads; SALAMI targets popular-song section labels; MusTBench audio is Slakh/
 Claim `status` is `unchecked`, `consistent` (all applicable deterministic checks passed), `ungrounded`
 (no valid locus) or `contradicted` (deterministic evidence disagrees). A model claim is never "verified";
 that word is reserved for artifact identity.
+
+`consistent` means only that the claim passed the checks that applied to it. The checks test whether a
+claimed difference or sameness sits where the signal did or did not change; they do not test what the
+claim says about pitch, timbre, voice or form. A `measurement-guided` check means a locating cue was
+given to the model before it spoke: the location is the measurement's, and the semantic content is used
+to the degree something else supports it (§4.2).
+
+Evidence is chosen by the question, and no kind substitutes for another:
+
+| Question | Evidence that answers it |
+| --- | --- |
+| How was it built, what was intended? | Source code and construction recipe |
+| What was actually rendered, where did the signal change? | The audio itself and deterministic measurements |
+| How does it sound, what is perceived? | Listening observations (model claims, and human listening where available) |
+| Where should the music go? | The creator |
 
 ### 3.2 Tasks and CLI
 
@@ -166,6 +213,11 @@ listening prompt, Hydrogen reported every goal as violated on both the defective
 render with the resonance removed). `review` therefore listens first without seeing the brief (`hear`, or
 `compare` with `--before`), applies the deterministic checks, and then asks a text-only assessment call to
 judge each goal from the non-contradicted claims only, answering `unclear` when no claim addresses a goal.
+That is the implemented behaviour: goals and protected relationships never reach a listening prompt
+(enforced in `tests/test_rules.py`); `--context` files do. Goal-blind listening halved the false alarms and
+also the detections (§4.1), so it is a correction of one failure, not a solved review. Any other strategy,
+such as goal-derived neutral questions or focused re-listening of the spans a goal names, is a proposal
+until its task is implemented and tested against the corrected-render control.
 
 Measurement-guided follow-up (added after the pilot, where whole-clip comparison missed audible
 articulation and resonance edits and answered "no perceptible difference"): measured difference regions that
@@ -207,6 +259,12 @@ Automatic limitations: `MODEL_INPUT_MONO` (multichannel input), `MODEL_INPUT_RED
 `MODEL_TIME_APPROXIMATE`, `CONTEXT_SUPPLIED` (claims may reflect context), `DIFFERENCE_CHECK_UNAVAILABLE`.
 
 ## 4. Acceptance criteria and evaluation protocol
+
+Evaluation and use are separate. The holdout split has been exposed: its results were read, then used to
+change the checks (`cc04df4`, `5fdb9d6`, re-applied to stored claims with `eval/recheck.py`) and to compare a second model. It now serves reproduction,
+diagnosis and regression. A claim about capability on unseen material needs works or sources that
+development has not touched. In real composition the caller supplies whatever context the question needs
+(§3.1); the no-context conditions below isolate what the audio alone yields and are not a usage rule.
 
 Four independent groups. Group 1 and 4 thresholds are fixed now. Group 2 and 3 targets are calibrated on a
 pilot split, committed to `eval/thresholds.json`, and only then is the holdout split run. Results report
@@ -257,21 +315,95 @@ checks to the same stored claims with `eval/recheck.py` (no new model calls). In
 | Bit-identical pairs | 4/4 reported identical, 0 model calls |
 | Near-null pairs, hallucinated differences | 0/5 cases |
 | Misleading source context (claims a detune that is absent) | 2 hallucinated difference claims in 1/1 case; survived the 1b05b5e checks (hard criterion failed), contradicted by the final checks |
-| Controlled edits, right kind of change named | 3/23 = 13 % [5, 32]; mute 1/3, timing 1/3, pitch 1/5, articulation 0/3, resonance 0/5, balance, dynamics, entry, removed theme return 0/1 each |
-| Controlled edits, any difference claim at the right place (±3 s) | 7/23 = 30 % [16, 51] |
-| Deterministic difference onset within 3 s | 23/23 |
-| With source context (SC cases) | 3/3 named, but the misleading-context control shows context alone produces such claims |
+| Controlled edits, a `differs` claim whose `aspect` is in the edit's allowed set | 3/23 = 13 % [5, 32]; mute 1/3, timing 1/3, pitch 1/5, articulation 0/3, resonance 0/5, balance, dynamics, entry, removed theme return 0/1 each |
+| Controlled edits, any `differs` claim overlapping the true interval ±3 s, any aspect | 7/23 = 30 % [16, 51] |
+| Earliest measured difference region starts within 3 s of the true onset | 23/23 |
+| With source context (SC cases) | 0/3 without context, 3/3 with (allowed-aspect match), but the misleading-context control shows context alone produces such claims |
 | Counterbalanced order, difference claims reproduced after swapping | 0/10 |
 | "Unchanged" claims lying over real edits contradicted | 379/419 (1b05b5e), 385/419 final; 0/47 on near-null pairs; 20/20 true difference claims kept |
 | Multiple-choice perception questions | 39/45 = 87 % [74, 94], chance 27 %; MUSE contour 18/18 (zero-shot single turn, not the paper's chat protocol); Bach10 instrument count 3/3, highest/lowest instrument 3/6, articulation in a focused passage 1/3; gamelan tuning, pulse and instrument families 7/7; fugue entry order, textures and SC theme returns 6/6; voice count 1/2 |
-| `hear` on long-form and non-Western recordings | 4/4 documents fully grounded, all four timescales, 5-9 relations each |
+| `hear` on long-form and non-Western recordings | 4/4 documents valid with every claim grounded; 53 claims, 30 relations (5-9 per document). All four timescales present in 4/4 as first recorded here, 3/4 in the later tabulation in `eval/moss-results.md`; the stored run decides, see §4.4 |
 | Revision pilot (5 SC defects × 3) | code only 15/15, code + listening 15/15, difference 0 [-0.20, 0.20]: ceiling, not discriminative |
 | Goal review on defective vs corrected renders | goals in the listening prompt: 5/5 flagged, 5/5 corrected falsely flagged; goal-blind: 2/5 flagged, 2/5 falsely flagged |
-| Cost | median 35 s per call, US$0.027 per audio minute, US$4.59 for the holdout |
+| Latency | 35.42 s is the median of 96 document-level sums, not of calls: those documents hold 144 interactions (111 primary, 33 automatic follow-ups), and a per-call median over all 144 cannot be recovered from the stored sums. The 43 single-interaction choice tasks have a median of 13.71 s |
+| Cost | US$0.027 per audio minute and US$4.59 for the holdout, estimated from saved token counts at `eval/score.py`'s price assumptions, not invoiced |
 
-Conclusions: deterministic measurement, not the listening model, is what localizes change; the model is useful for
-multiple-choice perception, description of whole recordings and broad structure, and is unreliable for subtle
-single-voice edits, order-stable comparison and goal verdicts. Usefulness for real revision is not demonstrated.
+### 4.2 How to read these results
+
+The numbers above are kept as recorded. What each one supports:
+
+- **3/23 is an allowed-aspect match.** A case counts when the model emitted a `differs` claim whose `aspect`
+  label belongs to the set registered for that edit kind in `eval/corpus.py` (`CHANGE_ASPECTS`; for a mute:
+  texture, voice, dynamics or timbre). Nobody graded whether the claim's prose describes the edit, so 3/23 is
+  neither a semantic accuracy nor a perception rate. With automatic follow-ups counted it is 4/23, and those
+  claims are `measurement-guided`.
+- **23/23 is onset localization by measurement.** The start of the earliest measured difference region lies
+  within 3 s of the recipe's onset. It says nothing about the end of the change, about later regions, or about
+  what changed, and it involves no model.
+- **The 23 edits are several constructions, not one.** 15 are single-instrument edits inside a four-stem Bach10
+  remix (mute, timing, pitch, articulation, resonance, three pieces each); 4 are span edits applied to a whole
+  recording (+100 cents and −10 dB on *The Art of Fugue*, +40 cents on duduk, an added resonance on shakuhachi);
+  3 are SuperCollider parameter changes (entry delay, filter resonance, balance); 1 removes a theme return from a
+  long-form SuperCollider piece. The pooled rate mixes these; per-kind cells have 1 to 5 cases and support no
+  per-kind conclusion.
+- **15/15 against 15/15 is parameter repair by a text agent.** The reviser is a text-only model call that sees
+  the source and the goal and proposes parameters; success is the defect parameter landing in its registered
+  range. The defect was recoverable from the code and the goal alone, so the pilot cannot show whether listening
+  helps and says nothing about revision of music whose problem is only audible.
+- **`hear` validity and coverage are not correctness.** Grounded loci, timescales present and relation counts
+  describe the form of the document. No caption was graded against a reference or by listeners.
+- **39/45 is letter accuracy on closed questions**, zero-shot, on this corpus, against a mean chance of 27 %.
+  Sub-families are small (1 to 18 cases) and uneven: MUSE contour 18/18, highest or lowest instrument 3/6.
+- **0/10 is a claim count.** Ten `differs` claims from 6 of the 15 counterbalanced cases were eligible, and none
+  reappeared with the clip order swapped. Cases without a difference claim contribute nothing.
+- **385/419 and 0/47 measure the checks,** not the model: how often the deterministic rule contradicts an
+  "unchanged" claim lying over a real edit, and how often it wrongly does so on near-null pairs.
+
+Supported by this evidence: the measurement locates where a signal changed; closed questions about a whole
+recording or a focused span are often answered correctly; whole-recording descriptions are well-formed and
+located. Not supported: that the model names what changed in a comparison, that its difference claims are
+stable under order, that goal verdicts separate defective from corrected renders, or that listening evidence
+changes a caller's decision. The last has not been tested with a task able to show it.
+
+### 4.3 MOSS-Music: decision and negative result
+
+The frozen MOSS-Music-8B-Instruct method (upstream `ad107c7`, weights `fce7f83`, Transformers 4.57.1 on Apple
+MPS, greedy decoding, method frozen at `19d2bed`) does not enter the product. This is a decision under this
+round's method and evidence, recorded in full in [`eval/moss-results.md`](../eval/moss-results.md):
+
+- Choice accuracy 14/43 valid (33 %, 43/45 covered) against Hydrogen's 38/43 on the same cases; three MOSS-only
+  wins and no difference claim on the misleading-context pair.
+- Allowed-aspect match 0/19 valid (19/23 covered). No MOSS comparison claim used the `differs` relation, so the
+  zero includes failure to use the required protocol and does not show that the prose lacked content.
+- 26 of 138 responses failed JSON or schema validation, 40 response-free memory failures needed fresh-process
+  recovery, and sampled MPS driver allocation peaked at 193.51 GB on a 128 GB machine.
+
+The result is not the model's intrinsic limit. A new model version, a different runtime (SGLang/CUDA was not
+tested), a different prompt or output method, or evidence from a specific task are each a reason to evaluate
+again. Research trials stay separate from product dependencies: the MOSS runtime is pinned in
+`eval/moss-requirements.txt`, runs in its own interpreter, and nothing under `src/` imports it.
+
+### 4.4 Open questions
+
+Exploration stays open: new models, signal methods, ways of supplying context, task designs and outside music
+research may explain a real failure, reveal a musical use nobody planned for, and change the next question or
+the current priority. A proposal for further investment states which musical question it helps, what it may
+add over the existing method, and what it costs to use.
+
+1. **Does sound information change the caller's next decision?** Untested. The revision pilot was at ceiling
+   without listening. This is the current priority; it needs tasks in which the deciding fact is audible and
+   absent from the source (interaction of voices, masking, the rendered result of a nonlinear or stochastic
+   process, a recording with no source at all), on material development has not touched.
+2. **What do free-form observations get right?** `hear` and `investigate` content has no correctness grade.
+   Grading needs reference facts from scores and recipes, or listeners.
+3. **Which context helps which question?** Context raised the allowed-aspect match on three cases and produced
+   two false claims on one control. Target material and neutral text hints have not been tried.
+4. **Review beyond goal-blind listening.** See the proposal status in §3.2.
+5. **Relations and long-range structure.** Coverage so far is a handful of closed questions (fugue entries,
+   theme returns, texture); continuation and transformation of material have no task of their own.
+6. **Human listening.** Protocol below, not executed.
+7. **Record keeping.** The `hear` timescale count differs between this document and `eval/moss-results.md`
+   (4/4 against 3/4); recount from the stored `holdout-1` run before quoting either.
 
 Human blind listening (ABX for difference claims, BS.1116-style hidden-reference grading for subtle
 changes, Krippendorff's α across raters) is specified here but not executed in 1.0: it needs recruited
@@ -327,7 +459,9 @@ a match only on a `before` input fails with `ARTIFACT_ROLE_MISMATCH`. Evidence `
 the result keeps the `sc-agent-ide/analysis-check` v1 shape with `versions.evidence`. The `--receipt`
 path for 0.2 stays byte-for-byte unchanged.
 
-Migration: every SC Agent IDE release and `main` up to 1.12.1-rc.1 only understands 0.2 receipts. Users of those releases keep
-`agent-listening` 0.2.0 (`uv tool install git+https://github.com/Bayern99/Agent-Listening-CLI@v0.2.0`);
-with 1.0 installed the old checker fails loudly (`RECEIPT_VERSION_UNKNOWN`, exit 1), never silently.
-The coordinated SC Agent IDE change accepts both formats, so upgrading the IDE first is always safe.
+Migration: every SC Agent IDE tag up to `v1.12.1-rc.1` and its `main` (package version 1.12.1 at `0aec06b`,
+checked 2026-11-21) only understand 0.2 receipts. Users of those versions keep `agent-listening` 0.2.0
+(`uv tool install git+https://github.com/Bayern99/Agent-Listening-CLI@v0.2.0`); with 1.0 installed the old
+checker fails loudly (`RECEIPT_VERSION_UNKNOWN`, exit 1), never silently. The `--evidence` path exists only
+on the unmerged SC Agent IDE branch `agent-listening-1.0-evidence` (`63ab0f8`). That change accepts both
+formats, so upgrading the IDE first is always safe.
