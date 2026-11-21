@@ -7,7 +7,8 @@
 The caller is a text agent that cannot hear. It reads a goal and the source, plus the evidence its
 condition allows, and returns one closed-form decision. Evidence comes from the installed CLI only.
 
-Usage: uv run eval/decide.py --run NAME --cli agent-listening [--gemini-api EXE] [--repeats N]
+Usage: uv run eval/decide.py --run NAME --cli agent-listening [--only source] [--gemini-api EXE]
+Refuses to start unless code, tools and audio match eval/decision_registration.json.
 Spends model calls unless --gemini-api and --caller-api point at fakes.
 """
 
@@ -20,26 +21,16 @@ import sys
 import time
 from pathlib import Path
 
-import soundfile as sf
-
 sys.path.insert(0, str(Path(__file__).parent))
+import decision_registration as reg
 import decision_scenarios as ds
 import decision_score
 from build import EVAL_DIR
 
-CONDITIONS = ("source", "source+measurement", "source+listening")
-RENDERS = ("defect", "control")
-CALLER_MODEL = "gemini-4-hydrogen"
-LISTENING_CALL_BUDGET = 2
-SYSTEM = "You decide the next revision of a piece from its source. You cannot hear the audio yourself."
-
-
-def render(scenario_name: str, kind: str, out_dir: Path) -> Path:
-    path = out_dir / f"{scenario_name}.{kind}.wav"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(path, ds.mix(ds.SCENARIOS[scenario_name], kind), ds.SR, subtype="PCM_24")
-    return path
+CONDITIONS = reg.CONDITIONS
+RENDERS = reg.RENDERS
+CALLER = reg.CALLER
+LISTENING_CALL_BUDGET = reg.LISTENING_CALL_BUDGET
 
 
 def listening_plan(scenario: dict, audio: Path, condition: str) -> list[list[str]]:
@@ -52,11 +43,11 @@ def listening_plan(scenario: dict, audio: Path, condition: str) -> list[list[str
     return []
 
 
-def collect(cli: str, plan: list[list[str]], gemini_api: str | None) -> tuple[list[dict], list[dict]]:
+def collect(cli: str, plan: list[list[str]], gemini_api: str) -> tuple[list[dict], list[dict]]:
     """Run the plan through the installed CLI. Returns evidence documents and one log entry per command."""
     documents, log = [], []
     for command in plan:
-        argv = [cli, *command, *(["--gemini-api", gemini_api] if gemini_api else [])]
+        argv = [cli, *command, "--gemini-api", gemini_api]
         started = time.monotonic()
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False)
         evidence = json.loads(proc.stdout)
@@ -111,8 +102,7 @@ def prompt(scenario: dict, source: str, documents: list[dict]) -> str:
         )
     return (
         f"Goal from the composer: {scenario['goal']['text']}\n\nCurrent source:\n```python\n{source}\n```\n"
-        f"{block}\nDecide the next step. Set target to the one voice to bring forward and direction to "
-        '"raise", or set both to "none" if nothing should change.'
+        f"{block}\nDecide the next step. Answer with exactly one of: {', '.join(scenario['options'])}."
     )
 
 
@@ -120,32 +110,26 @@ def schema(scenario: dict) -> dict:
     return {
         "type": "object",
         "properties": {
-            "target": {"type": "string", "enum": [*scenario["voices"], "none"]},
-            "direction": {"type": "string", "enum": ["raise", "none"]},
+            "decision": {"type": "string", "enum": scenario["options"]},
             "rationale": {"type": "string"},
         },
-        "required": ["target", "direction", "rationale"],
+        "required": ["decision", "rationale"],
     }
 
 
-def decision(reply: dict | None) -> str | None:
-    """Closed-form decision string, or None when the reply is not one of the allowed forms."""
-    if not isinstance(reply, dict):
-        return None
-    target, direction = reply.get("target"), reply.get("direction")
-    if target == "none" and direction == "none":
-        return ds.NO_CHANGE
-    if direction == "raise" and isinstance(target, str) and target != "none":
-        return f"raise:{target}"
+def decision(reply: dict | None, scenario: dict) -> str | None:
+    """The chosen option, or None when the reply is not one of the scenario's options."""
+    if isinstance(reply, dict) and reply.get("decision") in scenario["options"]:
+        return reply["decision"]
     return None
 
 
 def ask_caller(caller_api: str, text: str, response_schema: dict) -> tuple[dict | None, dict]:
     body = {
-        "generation_config": {"thinking_level": "high"},
+        "generation_config": {"thinking_level": CALLER["thinking_level"]},
         "response_format": {"type": "text", "mime_type": "application/json", "schema": response_schema},
     }
-    argv = [caller_api, "generate", text, "-m", CALLER_MODEL, "--system", SYSTEM]
+    argv = [caller_api, "generate", text, "-m", CALLER["model"], "--system", CALLER["system"]]
     argv += ["--body", "@-", "--stream=false", "-o", "json", "--agent-mode"]
     proc = subprocess.run(
         argv, input=json.dumps(body), capture_output=True, text=True, timeout=900, check=False
@@ -173,12 +157,15 @@ def decide(
     repeat: int,
     audio: Path,
     cli: str,
-    gemini_api: str | None,
+    gemini_api: str,
     caller_api: str,
 ) -> dict:
     scenario = ds.SCENARIOS[name]
     started = time.monotonic()
-    documents, commands = collect(cli, listening_plan(scenario, audio, condition), gemini_api)
+    plan = listening_plan(scenario, audio, condition)
+    if sum("--dry-run" not in command for command in plan) > LISTENING_CALL_BUDGET:
+        raise RuntimeError(f"{name}/{kind}/{condition}: the plan exceeds the listening call budget")
+    documents, commands = collect(cli, plan, gemini_api)
     listening_calls = sum(c["calls"] for c in commands)
     if listening_calls > LISTENING_CALL_BUDGET:
         raise RuntimeError(f"{name}/{kind}/{condition}: {listening_calls} listening calls exceed the budget")
@@ -191,10 +178,9 @@ def decide(
         "render": kind,
         "condition": condition,
         "repeat": repeat,
-        "target": reply.get("target") if isinstance(reply, dict) else None,
-        "direction": reply.get("direction") if isinstance(reply, dict) else None,
+        "reply": reply.get("decision") if isinstance(reply, dict) else None,
         "rationale": reply.get("rationale") if isinstance(reply, dict) else None,
-        "decision": decision(reply),
+        "decision": decision(reply, scenario),
         "commands": commands,
         "cost": {
             "caller_calls": 1,
@@ -209,20 +195,35 @@ def decide(
     }
 
 
-def run(out_dir: Path, cli: str, gemini_api: str | None, caller_api: str, repeats: int) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def run(
+    out_dir: Path,
+    cli: str,
+    gemini_api: str,
+    caller_api: str,
+    repeats: int = reg.REPEATS,
+    conditions: tuple[str, ...] = CONDITIONS,
+) -> dict:
+    if (out_dir / "decisions.jsonl").exists():
+        raise FileExistsError(out_dir / "decisions.jsonl")
+    if not set(conditions) <= set(CONDITIONS):
+        raise ValueError(f"unknown condition in {conditions}")
+    manifest = reg.preflight(out_dir, cli, gemini_api, caller_api, repeats)
+    manifest["conditions"] = list(conditions)
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     records = []
     with (out_dir / "decisions.jsonl").open("x", encoding="utf-8") as log:
         for name in ds.SCENARIOS:
             for kind in RENDERS:
-                audio = render(name, kind, out_dir / "audio")
-                for condition in CONDITIONS:
+                audio = out_dir / "audio" / f"{name}.{kind}.wav"
+                for condition in conditions:
                     for repeat in range(repeats):
                         record = decide(name, kind, condition, repeat, audio, cli, gemini_api, caller_api)
                         records.append(record)
                         log.write(json.dumps(record, ensure_ascii=False) + "\n")
                         log.flush()
     report = decision_score.score(records, ds.answer_keys())
+    report["manifest"] = manifest
+    report["calibration"] = reg.calibrate(records, reg.load())
     (out_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
@@ -231,11 +232,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", required=True)
     parser.add_argument("--cli", required=True, help="installed agent-listening executable")
-    parser.add_argument("--gemini-api", default=None, help="provider executable passed to the CLI")
+    parser.add_argument("--gemini-api", default="gemini-api", help="provider executable passed to the CLI")
     parser.add_argument("--caller-api", default="gemini-api", help="provider executable for the caller agent")
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--only", choices=CONDITIONS, help="run one condition, e.g. source for calibration")
     args = parser.parse_args()
-    report = run(EVAL_DIR / "runs" / args.run, args.cli, args.gemini_api, args.caller_api, args.repeats)
+    conditions = (args.only,) if args.only else CONDITIONS
+    out_dir = EVAL_DIR / "runs" / args.run
+    report = run(out_dir, args.cli, args.gemini_api, args.caller_api, conditions=conditions)
     print(json.dumps(report, indent=2))
 
 
