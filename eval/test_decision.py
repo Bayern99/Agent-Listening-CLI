@@ -167,6 +167,9 @@ def test_source_shown_to_the_caller_contains_no_answer():
     for kind in ("defect", "control"):
         text = ds.source_text(scenario, kind)
         assert "padDrive" in text and "def trio" in text
+        compile(text, "source", "exec")
+        for name in ("SR", "_one_pole", "_unit", "_unit_rms"):  # everything trio depends on is shown
+            assert f"{name} = " in text or f"def {name}(" in text
         for leak in ("defect", "control", "raise:", "masked", "answer"):
             assert leak not in text
 
@@ -235,3 +238,31 @@ def test_pipeline_runs_end_to_end_with_fake_providers(tmp_path):
     assert family["change_vs_source"]["source+listening"]["cells"]["wrong_to_right"] == 2
     assert family["change_vs_source"]["source+measurement"]["cells"]["incomplete"] == 2
     assert family["conditions"]["source+listening"]["listening_commands"] == {"ask": 4, "hear": 4}
+
+
+def test_caller_usage_survives_a_reply_that_is_not_a_decision(tmp_path):
+    caller = tmp_path / "caller"
+    caller.write_text(
+        f"#!{sys.executable}\nimport json\n"
+        'print(json.dumps({"steps": [{"type": "model_output", "content": '
+        '[{"type": "text", "text": "not json"}]}],'
+        ' "usage": {"total_input_tokens": 50, "total_output_tokens": 10}}))\n'
+    )
+    caller.chmod(0o755)
+    reply, usage = decide.ask_caller(str(caller), "prompt", {})
+    assert reply is None and usage == {"total_input_tokens": 50, "total_output_tokens": 10}
+
+
+def test_decisions_already_made_are_on_disk_when_a_later_one_fails(tmp_path, monkeypatch):
+    made = []
+
+    def flaky(name, kind, condition, repeat, *rest):
+        if len(made) == 2:
+            raise TimeoutError
+        made.append(1)
+        return {"scenario": name, "render": kind, "condition": condition, "repeat": repeat}
+
+    monkeypatch.setattr(decide, "decide", flaky)
+    with pytest.raises(TimeoutError):
+        decide.run(tmp_path / "run", "cli", None, "caller", repeats=1)
+    assert len((tmp_path / "run" / "decisions.jsonl").read_text().splitlines()) == 2

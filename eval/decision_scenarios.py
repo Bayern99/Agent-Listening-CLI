@@ -117,9 +117,12 @@ def mix(scenario: dict, render: str) -> np.ndarray:
 
 
 def source_text(scenario: dict, render: str) -> str:
-    """What the caller reads: the render code and this render's parameters."""
+    """What the caller reads: this render's parameters and all the code that turns them into sound."""
     params = json.dumps(scenario[render], indent=2)
-    return f"p = {params}\n\n{inspect.getsource(RENDERERS[scenario['renderer']])}"
+    code = "\n\n".join(
+        inspect.getsource(f) for f in (_one_pole, _unit, _unit_rms, RENDERERS[scenario["renderer"]])
+    )
+    return f"SR = {SR}\np = {params}\n\n{code}"
 
 
 def band_ratio_db(scenario: dict, render: str) -> float:

@@ -150,8 +150,10 @@ def ask_caller(caller_api: str, text: str, response_schema: dict) -> tuple[dict 
     proc = subprocess.run(
         argv, input=json.dumps(body), capture_output=True, text=True, timeout=900, check=False
     )
+    usage: dict = {}
     try:
         interaction = json.loads(proc.stdout)
+        usage = interaction.get("usage") or {}
         output = "".join(
             part["text"]
             for step in interaction["steps"]
@@ -159,9 +161,9 @@ def ask_caller(caller_api: str, text: str, response_schema: dict) -> tuple[dict 
             for part in step["content"]
             if part.get("type") == "text"
         )
-        return json.loads(output), interaction.get("usage") or {}
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return None, {}
+        return json.loads(output), usage
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return None, usage
 
 
 def decide(
@@ -210,15 +212,18 @@ def decide(
 def run(out_dir: Path, cli: str, gemini_api: str | None, caller_api: str, repeats: int) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = []
-    for name in ds.SCENARIOS:
-        for kind in RENDERS:
-            audio = render(name, kind, out_dir / "audio")
-            for condition in CONDITIONS:
-                for repeat in range(repeats):
-                    records.append(decide(name, kind, condition, repeat, audio, cli, gemini_api, caller_api))
-    (out_dir / "decisions.jsonl").write_text(
-        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
-    )
+    with (out_dir / "decisions.jsonl").open(
+        "w", encoding="utf-8"
+    ) as log:  # written as decided: a crash keeps them
+        for name in ds.SCENARIOS:
+            for kind in RENDERS:
+                audio = render(name, kind, out_dir / "audio")
+                for condition in CONDITIONS:
+                    for repeat in range(repeats):
+                        record = decide(name, kind, condition, repeat, audio, cli, gemini_api, caller_api)
+                        records.append(record)
+                        log.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        log.flush()
     report = decision_score.score(records, ds.answer_keys())
     (out_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
