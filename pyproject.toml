@@ -53,6 +53,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ERA", "PTH"]
 # eval/ E501s are long string literals (truth values, goals, docstrings) that must not be reworded
 "eval/corpus.py" = ["E501"]
 "eval/revise.py" = ["E501"]
+"eval/decision_scenarios.py" = ["E501"]
 "eval/run.py" = ["E501"]
 "eval/score.py" = ["E501"]
 
