@@ -31,8 +31,16 @@ through the real CLI (`uv build`, install into a fresh venv, run the command on 
   comes from original sources and construction recipes; audio stays in `$AGENT_LISTENING_EVAL_DIR`, outside git.
 - Comments carry only protocol, math, licensing or platform facts the code cannot express.
 
-## Issues and labels
+## Agent skills
 
-Issues and verification records live in GitHub Issues/PRs for `Bayern99/Agent-Listening-CLI` (`gh`).
-Triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`.
-Domain vocabulary: [docs/architecture.md §3.1](docs/architecture.md#31-concepts-the-whole-vocabulary).
+### Issue tracker
+
+Issues, specs and verification records live in GitHub Issues for `Bayern99/Agent-Listening-CLI` (`gh`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles, each label equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context. Vocabulary is `docs/architecture.md` §3.1; there is no separate glossary. See `docs/agents/domain.md`.
