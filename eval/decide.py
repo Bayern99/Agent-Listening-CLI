@@ -212,9 +212,7 @@ def decide(
 def run(out_dir: Path, cli: str, gemini_api: str | None, caller_api: str, repeats: int) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = []
-    with (out_dir / "decisions.jsonl").open(
-        "w", encoding="utf-8"
-    ) as log:  # written as decided: a crash keeps them
+    with (out_dir / "decisions.jsonl").open("x", encoding="utf-8") as log:
         for name in ds.SCENARIOS:
             for kind in RENDERS:
                 audio = render(name, kind, out_dir / "audio")

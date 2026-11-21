@@ -168,7 +168,7 @@ def test_source_shown_to_the_caller_contains_no_answer():
         text = ds.source_text(scenario, kind)
         assert "padDrive" in text and "def trio" in text
         compile(text, "source", "exec")
-        for name in ("SR", "_one_pole", "_unit", "_unit_rms"):  # everything trio depends on is shown
+        for name in ("SR", "_one_pole", "_unit", "_unit_rms"):
             assert f"{name} = " in text or f"def {name}(" in text
         for leak in ("defect", "control", "raise:", "masked", "answer"):
             assert leak not in text
@@ -266,3 +266,10 @@ def test_decisions_already_made_are_on_disk_when_a_later_one_fails(tmp_path, mon
     with pytest.raises(TimeoutError):
         decide.run(tmp_path / "run", "cli", None, "caller", repeats=1)
     assert len((tmp_path / "run" / "decisions.jsonl").read_text().splitlines()) == 2
+
+
+def test_a_run_never_overwrites_recorded_decisions(tmp_path):
+    (tmp_path / "decisions.jsonl").write_text("kept\n")
+    with pytest.raises(FileExistsError):
+        decide.run(tmp_path, "cli", None, "caller", repeats=1)
+    assert (tmp_path / "decisions.jsonl").read_text() == "kept\n"
