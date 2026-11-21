@@ -17,9 +17,11 @@ extractors.
 - Listening via `gemini-4-hydrogen` through the pinned `gemini-api` 0.4.x CLI; deterministic PCM identity
   and signal-difference checks derive every claim's status.
 - Removed: Essentia, all-in-one, Demucs, Basic Pitch, JAMS, the `src` package, analysis modes and profiles.
-- Migration: SC Agent IDE ≤ 1.9.1 accepts only 0.2 receipts; keep `agent-listening` 0.2.0 installed for
-  those releases or upgrade SC Agent IDE to a version whose `check-analysis.mjs` accepts `--evidence`.
-  See docs/architecture.md §6.
+- Migration: SC Agent IDE tags up to `v1.12.1-rc.1` and its `main` accept only 0.2 receipts; keep
+  `agent-listening` 0.2.0 installed for those versions. `check-analysis.mjs --evidence` exists only on the
+  unmerged SC Agent IDE branch `agent-listening-1.0-evidence`. See docs/architecture.md §6.
+- Evaluated and not adopted: MOSS-Music-8B-Instruct under a frozen Transformers/MPS method
+  (`eval/moss-results.md`, docs/architecture.md §4.3).
 
 ## [0.2.0] - 2026-08-30
 
