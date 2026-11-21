@@ -49,8 +49,8 @@
       },
       "listening_question": "Which separate voices or lines can be followed in this passage, and is any of them hard to follow?",
       "recipe_sha256": {
-        "defect": "f7ca2f5a8d0e70a572886dcbc9c8c5ef4819bc47a23707ecd364981db3bc0651",
-        "control": "e70330138fd9f9246923825a5101ea349372985d4c7639816667e764e1fb0023"
+        "defect": "5cda2bab1b381bb712fbea5d6e02e49a42fde63ee5b125fbc6f424afe93594f3",
+        "control": "f786db3f57ddf884fcbb9e54308927ad359bb5a667212ae1817f6bfcf9226914"
       }
     },
     "masked-bass": {
@@ -73,8 +73,8 @@
       },
       "listening_question": "Which separate voices or lines can be followed in this passage, and is any of them hard to follow?",
       "recipe_sha256": {
-        "defect": "12f6e2bc82b133454858cb9a06dfbff57a7199293098165aa766a53dc8cecac5",
-        "control": "d4a1e5ac1af2dd7a4ebe4970f71783c571b74433970210eb16b2fc248a27c0cd"
+        "defect": "a99fb4523085e05e597e013a420b727a0c37e18450fba36097fec6de4d7955d0",
+        "control": "a1359f422e95871bb50b6098c6ec02f9adf015ecdd67917201a95e33f19c1329"
       }
     },
     "beating-chime": {
@@ -96,8 +96,8 @@
       },
       "listening_question": "Does any sustained sound in this passage waver, pulse or beat, and if so which sounds are involved?",
       "recipe_sha256": {
-        "defect": "a31a27530c0090070269df072fa2584fd8ed69a410efe433d1897a826892b159",
-        "control": "2c583216acea7a67ea9cad4dd7d84f5d3cf17b685bd2e36e95c50a7cfb79ffaf"
+        "defect": "f78d0e8c6d17c80a9528fb143ae069a5eb79aec248c10f4e3930583d5a152c70",
+        "control": "9a3e5b3d2f3d99a4d3297a73bb7c2a3ab3e8500adf6a80b000381e244578e6ce"
       }
     },
     "ringing-room": {
@@ -120,8 +120,8 @@
       },
       "listening_question": "How do the separate lines balance in this passage, and does any of them ring or boom more than the others?",
       "recipe_sha256": {
-        "defect": "9f5a52ef6bf00025c2e281e8f3528eb97416d8c94e5a85e15924e47e4d9ce4ee",
-        "control": "1334be392d3522ca082bb19d0a5f87d65849945599b2b28b88292d236bbc4373"
+        "defect": "08ef61cae6cd6714c825816b1dfd0ae3266dc3a19079d15cdb9d993ead7a34ea",
+        "control": "03e51b066560debb9995175ebb8f0e3bbf83868f4466d2e1c0a727fa01fd2919"
       }
     },
     "crowded-register": {
@@ -143,8 +143,8 @@
       },
       "listening_question": "Which lines are in this passage, and do any of them share the same pitch range?",
       "recipe_sha256": {
-        "defect": "907a20800e01eb8b45d9e5ce5cfb358442fe411ac611f12b0ec0b09d4b85b088",
-        "control": "9cc9ac97ee461d6c383b69fd7ef35895c303161498b77b4213eb53ad1ba7fb85"
+        "defect": "5f9a7a38a82def0994e58f21a1229435f1f34d8edb21b9a23aa97e7d6b15465c",
+        "control": "747034cc3dfb2ab95cdbeb467c23b2a101953f1f9f8705dc87f7239cde42d5bf"
       }
     },
     "uneven-levels": {
@@ -167,8 +167,8 @@
       },
       "listening_question": "How do the three lines balance in loudness in this passage?",
       "recipe_sha256": {
-        "defect": "51881fd663da03bd63313819ddd2c4c256116e71bfa67bf28e7a3003e7d106a4",
-        "control": "52155a4977dbb9a11d051ca2b1a7db49c1eaad3b206d0a16a83601e754d8eb9b"
+        "defect": "011dc60ce9d4d78df094ce56064071adbb1e8441a8536f9d91796de6cd1d25e8",
+        "control": "7f4775883345922f9b7c1f7fc2f222fbe9c1322fc4341a9e0d6bda739c1781ad"
       }
     },
     "stray-tuning": {
@@ -191,8 +191,8 @@
       },
       "listening_question": "Are the lines in this passage in tune with each other?",
       "recipe_sha256": {
-        "defect": "7484c6645d041bc68ce05a4b5a3739f807317a17932a498aaa59f78ccff49873",
-        "control": "04b262b1012b65a09db9c1f1ec04bb8a388a80e1171ea2ac9e7193d32356bad9"
+        "defect": "22d0cd5cb1edc32aeab7c56535bf09a66bd5d0f66c643953da0e284e6d5bccd5",
+        "control": "d30d1bfc337b4aaece4b25a0e9177fd058873b9192af4abf53a3deea4966bf9d"
       }
     },
     "late-entry": {
@@ -215,8 +215,8 @@
       },
       "listening_question": "When does each line enter at the start of this passage?",
       "recipe_sha256": {
-        "defect": "dd0577106115763f4832c2dc60588ce3a78403460a4cf0c73a628d40cdf8e66f",
-        "control": "034fd9ab49dfaf01506ae84d706e2306427ae430ee8d0cfe18bb901a4c391fe9"
+        "defect": "ccd247d82da914cd3b1bbe2ca6eff459485b9342a3e1df7cf564af52111e6350",
+        "control": "636bab8a8f68907d98ff7bcccb6d89f5159ffc81e55796acfb24ee00470f2ca7"
       }
     },
     "dull-voice": {
@@ -239,8 +239,8 @@
       },
       "listening_question": "How does the tone colour of each line compare in this passage?",
       "recipe_sha256": {
-        "defect": "d9a39c6b6332b1c1eaef34772ea82c1f5df54bf6c9608cbaaf0b5a9aa321b478",
-        "control": "196e5c67b77a875d5442f560ec2c729ae2373b1e635900004957951070afec4a"
+        "defect": "ef3e75e1a7961f44a6b97bf39c27b54fddd56c93ec28562a24e1e399cd637bfc",
+        "control": "d4c1e3b7dd6db55f939d82d36fbd5bf14471770bc612c16bc305cef379db2569"
       }
     },
     "drifting-line": {
@@ -262,8 +262,8 @@
       },
       "listening_question": "How does the pitch of the melody at the end of this passage compare with its pitch at the start?",
       "recipe_sha256": {
-        "defect": "811a40deaf260390df8e51191b10d1289287485a9e79e79b7f4dfd0789711942",
-        "control": "8deb6e6d564ef2ccd4284a5d28d017e046a79e234c802ecdab03dbdd59301209"
+        "defect": "9be32df528ce01dd48821ccae699559bdbc3f198cf5d53a6a28befcb86fe85c7",
+        "control": "9d91844dda0736f9b2d55d4cf22129ed59cfe1ffd5bd6316aa0a0f95bb98a026"
       }
     }
   }

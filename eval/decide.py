@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -232,7 +233,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", required=True)
     parser.add_argument("--cli", required=True, help="installed agent-listening executable")
-    parser.add_argument("--gemini-api", default="gemini-api", help="provider executable passed to the CLI")
+    configured = os.environ.get("AGENT_LISTENING_GEMINI_API", "gemini-api")
+    parser.add_argument("--gemini-api", default=configured, help="provider executable passed to the CLI")
     parser.add_argument("--caller-api", default="gemini-api", help="provider executable for the caller agent")
     parser.add_argument("--only", choices=CONDITIONS, help="run one condition, e.g. source for calibration")
     args = parser.parse_args()

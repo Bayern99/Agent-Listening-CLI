@@ -272,15 +272,40 @@ def test_calibration_gate_admits_only_scenarios_near_chance_and_lists_the_rest()
         source_records("masked-melody", ["raise:melody"] + ["no-change"] * 4 + ["raise:pad"] * 5)  # 0.10
         + source_records("masked-melody", ["raise:melody"] * 3)[:3]  # now 4/13 = 0.31 <= 0.25 + 0.15
         + source_records("beating-chime", ["retune:chime"] * 5 + ["no-change"] * 5)  # 0.50 > 0.33 + 0.15
-        + [record("source+listening", 0, "earlier:mid", scenario="late-entry")]  # no source-only decision
+        + [
+            record("source", 0, None, scenario="late-entry"),
+            record("source", 1, "lower:pad", scenario="late-entry"),
+        ]
     )
     gate = reg.calibrate(records, registered)
     assert [e["scenario"] for e in gate["admitted"]] == ["masked-melody"]
     assert gate["admitted"][0]["defect_correct"] == {"k": 4, "n": 13, "rate": 0.3077}
+    assert gate["admitted"][0]["defect_valid"] == 13
     assert {e["scenario"]: e["reason"] for e in gate["excluded"]} == {
         "beating-chime": "source-only correctness above chance + margin",
-        "late-entry": "no source-only decision on the defect render",
+        "late-entry": "no valid source-only decision on the defect render",
     }
+
+
+def test_saved_run_is_gated_only_under_the_registration_it_ran_with(tmp_path):
+    registered = reg.current({"masked-melody": ds.SCENARIOS["masked-melody"]})
+    lines = [json.dumps(r) for r in source_records("masked-melody", ["no-change"] * 3)]
+    (tmp_path / "decisions.jsonl").write_text("\n".join(lines) + "\n")
+    (tmp_path / "manifest.json").write_text(json.dumps({"configuration_sha256": reg.config_hash(registered)}))
+    assert len(reg.calibrate_run(tmp_path, registered)["admitted"]) == 1
+    with pytest.raises(reg.Mismatch, match="was run under"):
+        reg.calibrate_run(tmp_path, {**registered, "calibration_margin": 0.3})
+
+
+def test_recipe_hash_covers_mixing(monkeypatch):
+    scenario = ds.SCENARIOS["masked-melody"]
+    before = reg.recipe_hash(scenario, "defect")
+
+    def mix(scenario, render):
+        return 0.5 * np.sum(list(ds.stems(scenario, render).values()), axis=0)
+
+    monkeypatch.setattr(ds, "mix", mix)
+    assert reg.recipe_hash(scenario, "defect") != before
 
 
 def test_calibration_gate_margin_boundary():

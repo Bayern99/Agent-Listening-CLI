@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=2,<3", "soundfile>=0.12,<0.14", "scipy>=1.13,<2"]
+# ///
 """Registered configuration of the decision-change evaluation, the run record, and the calibration gate.
 
 `current()` is what the code in this checkout would run. `decision_registration.json` is what was
@@ -61,7 +65,7 @@ def _canonical(value: object) -> str:
 def recipe_hash(scenario: dict, render: str) -> str:
     """Identity of a render's recipe: its full parameters, hidden ones included, and the code that renders it."""
     renderer, helpers = ds.RENDERERS[scenario["renderer"]]
-    code = "\n".join(inspect.getsource(f) for f in (*helpers, renderer))
+    code = "\n".join(inspect.getsource(f) for f in (*helpers, renderer, ds.stems, ds.mix))
     return sha256(_canonical({"sr": ds.SR, "params": scenario[render], "code": code}))
 
 
@@ -175,7 +179,7 @@ def calibrate(records: list[dict], registered: dict) -> dict:
 
     One-sided on purpose: a caller that never finds the defect from source is exactly the case the
     evaluation needs, so only correctness above chance + margin excludes. A scenario with no
-    source-only defect decision is excluded.
+    valid source-only defect decision is excluded.
     """
     margin = registered["calibration_margin"]
     admitted, excluded = [], []
@@ -184,11 +188,13 @@ def calibrate(records: list[dict], registered: dict) -> dict:
         defect = [r for r in rows if r["render"] == "defect"]
         control = [r for r in rows if r["render"] == "control"]
         k = sum(r.get("decision") == scenario["answer"]["defect"] for r in defect)
+        valid = sum(r.get("decision") in scenario["options"] for r in defect)
         entry = {
             "scenario": name,
             "family": scenario["family"],
             "chance": scenario["chance"],
             "limit": round(scenario["chance"] + margin, 4),
+            "defect_valid": valid,
             "defect_correct": {
                 "k": k,
                 "n": len(defect),
@@ -199,13 +205,22 @@ def calibrate(records: list[dict], registered: dict) -> dict:
                 "n": len(control),
             },
         }
-        if not defect:
-            excluded.append({**entry, "reason": "no source-only decision on the defect render"})
+        if not valid:
+            excluded.append({**entry, "reason": "no valid source-only decision on the defect render"})
         elif k / len(defect) > scenario["chance"] + margin:
             excluded.append({**entry, "reason": "source-only correctness above chance + margin"})
         else:
             admitted.append(entry)
     return {"margin": margin, "admitted": admitted, "excluded": excluded}
+
+
+def calibrate_run(run_dir: Path, registered: dict) -> dict:
+    """Gate a saved run, only against the registration it was run under."""
+    ran_under = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["configuration_sha256"]
+    if ran_under != config_hash(registered):
+        raise Mismatch(f"{run_dir.name} was run under configuration {ran_under[:12]}, not the registered one")
+    lines = (run_dir / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    return calibrate([json.loads(line) for line in lines], registered)
 
 
 def main() -> None:
@@ -220,8 +235,8 @@ def main() -> None:
         return
     from build import EVAL_DIR
 
-    lines = (EVAL_DIR / "runs" / args.calibrate / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-    print(json.dumps(calibrate([json.loads(line) for line in lines], load()), indent=2))
+    run_dir = EVAL_DIR / "runs" / args.calibrate
+    print(json.dumps(calibrate_run(run_dir, load()), indent=2))
 
 
 if __name__ == "__main__":
