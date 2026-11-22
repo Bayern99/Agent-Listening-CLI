@@ -1,0 +1,270 @@
+{
+  "conditions": [
+    "source",
+    "source+measurement",
+    "source+listening"
+  ],
+  "renders": [
+    "defect",
+    "control"
+  ],
+  "repeats": 3,
+  "listening_call_budget": 2,
+  "calibration_margin": 0.15,
+  "caller": {
+    "model": "gemini-4-hydrogen",
+    "thinking_level": "high",
+    "system": "You decide the next revision of a piece from its source. You cannot hear the audio yourself."
+  },
+  "tools": {
+    "agent_listening": "1.0.0",
+    "provider_cli_series": "0.4",
+    "listening_model": "gemini-4-hydrogen"
+  },
+  "primary_comparison": {
+    "metric": "defect_correct",
+    "condition": "source+listening",
+    "baseline": "source",
+    "renders": "defect",
+    "guard": "control_false_change"
+  },
+  "scenarios": {
+    "masked-melody": {
+      "family": "interaction",
+      "kind": "masking",
+      "options": [
+        "raise:pad",
+        "raise:melody",
+        "raise:bass",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "raise:melody",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "Each of the three voices should be heard as its own line. If one voice is covered by the others, name the voice to bring forward. If all three already come through, change nothing."
+      },
+      "listening_question": "Which separate voices or lines can be followed in this passage, and is any of them hard to follow?",
+      "recipe_sha256": {
+        "defect": "5cda2bab1b381bb712fbea5d6e02e49a42fde63ee5b125fbc6f424afe93594f3",
+        "control": "f786db3f57ddf884fcbb9e54308927ad359bb5a667212ae1817f6bfcf9226914"
+      }
+    },
+    "masked-bass": {
+      "family": "interaction",
+      "kind": "difference-tone",
+      "options": [
+        "raise:lead",
+        "raise:bell",
+        "raise:bass",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "raise:bass",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "Each of the three voices should be heard as its own line. If one voice is covered by the others, name the voice to bring forward. If all three already come through, change nothing."
+      },
+      "listening_question": "Which separate voices or lines can be followed in this passage, and is any of them hard to follow?",
+      "recipe_sha256": {
+        "defect": "a99fb4523085e05e597e013a420b727a0c37e18450fba36097fec6de4d7955d0",
+        "control": "a1359f422e95871bb50b6098c6ec02f9adf015ecdd67917201a95e33f19c1329"
+      }
+    },
+    "beating-chime": {
+      "family": "interaction",
+      "kind": "beating",
+      "options": [
+        "retune:chime",
+        "retune:bass",
+        "no-change"
+      ],
+      "chance": 0.3333,
+      "answer": {
+        "defect": "retune:chime",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The organ tone is the tuning reference and should sound steady. If another voice makes it waver by beating against it, name the voice to retune. If the organ is steady, change nothing."
+      },
+      "listening_question": "Does any sustained sound in this passage waver, pulse or beat, and if so which sounds are involved?",
+      "recipe_sha256": {
+        "defect": "f78d0e8c6d17c80a9528fb143ae069a5eb79aec248c10f4e3930583d5a152c70",
+        "control": "9a3e5b3d2f3d99a4d3297a73bb7c2a3ab3e8500adf6a80b000381e244578e6ce"
+      }
+    },
+    "ringing-room": {
+      "family": "interaction",
+      "kind": "resonance",
+      "options": [
+        "lower:low",
+        "lower:mid",
+        "lower:high",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "lower:mid",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The three lines should sit at even weight in the room. If the room makes one line boom or ring out over the others, name the voice to pull back. If they are even, change nothing."
+      },
+      "listening_question": "How do the separate lines balance in this passage, and does any of them ring or boom more than the others?",
+      "recipe_sha256": {
+        "defect": "08ef61cae6cd6714c825816b1dfd0ae3266dc3a19079d15cdb9d993ead7a34ea",
+        "control": "03e51b066560debb9995175ebb8f0e3bbf83868f4466d2e1c0a727fa01fd2919"
+      }
+    },
+    "crowded-register": {
+      "family": "interaction",
+      "kind": "register",
+      "options": [
+        "move-down:counter",
+        "move-down:bass",
+        "no-change"
+      ],
+      "chance": 0.3333,
+      "answer": {
+        "defect": "move-down:counter",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The lead should have its register to itself. If another voice plays in the lead's register, name the voice to move down. If the lead has clear space, change nothing."
+      },
+      "listening_question": "Which lines are in this passage, and do any of them share the same pitch range?",
+      "recipe_sha256": {
+        "defect": "5f9a7a38a82def0994e58f21a1229435f1f34d8edb21b9a23aa97e7d6b15465c",
+        "control": "747034cc3dfb2ab95cdbeb467c23b2a101953f1f9f8705dc87f7239cde42d5bf"
+      }
+    },
+    "uneven-levels": {
+      "family": "hidden",
+      "kind": "level",
+      "options": [
+        "raise:low",
+        "raise:mid",
+        "raise:high",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "raise:high",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The three voices should come out about equally loud. If one voice came out clearly quieter than the other two in this performance, name the voice to bring up. If they are even, change nothing."
+      },
+      "listening_question": "How do the three lines balance in loudness in this passage?",
+      "recipe_sha256": {
+        "defect": "011dc60ce9d4d78df094ce56064071adbb1e8441a8536f9d91796de6cd1d25e8",
+        "control": "7f4775883345922f9b7c1f7fc2f222fbe9c1322fc4341a9e0d6bda739c1781ad"
+      }
+    },
+    "stray-tuning": {
+      "family": "hidden",
+      "kind": "tuning",
+      "options": [
+        "retune:low",
+        "retune:mid",
+        "retune:high",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "retune:low",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The three voices should be in tune with each other. If one voice came out clearly out of tune in this performance, name the voice to retune. If they are in tune, change nothing."
+      },
+      "listening_question": "Are the lines in this passage in tune with each other?",
+      "recipe_sha256": {
+        "defect": "22d0cd5cb1edc32aeab7c56535bf09a66bd5d0f66c643953da0e284e6d5bccd5",
+        "control": "d30d1bfc337b4aaece4b25a0e9177fd058873b9192af4abf53a3deea4966bf9d"
+      }
+    },
+    "late-entry": {
+      "family": "hidden",
+      "kind": "timing",
+      "options": [
+        "earlier:low",
+        "earlier:mid",
+        "earlier:high",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "earlier:mid",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The three voices should begin together. If one voice came in clearly after the other two in this performance, name the voice to move earlier. If they begin together, change nothing."
+      },
+      "listening_question": "When does each line enter at the start of this passage?",
+      "recipe_sha256": {
+        "defect": "ccd247d82da914cd3b1bbe2ca6eff459485b9342a3e1df7cf564af52111e6350",
+        "control": "636bab8a8f68907d98ff7bcccb6d89f5159ffc81e55796acfb24ee00470f2ca7"
+      }
+    },
+    "dull-voice": {
+      "family": "hidden",
+      "kind": "brightness",
+      "options": [
+        "brighten:low",
+        "brighten:mid",
+        "brighten:high",
+        "no-change"
+      ],
+      "chance": 0.25,
+      "answer": {
+        "defect": "brighten:high",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The three voices should share a similar, open tone. If one voice came out clearly duller than the other two in this performance, name the voice to brighten. If they match, change nothing."
+      },
+      "listening_question": "How does the tone colour of each line compare in this passage?",
+      "recipe_sha256": {
+        "defect": "ef3e75e1a7961f44a6b97bf39c27b54fddd56c93ec28562a24e1e399cd637bfc",
+        "control": "d4c1e3b7dd6db55f939d82d36fbd5bf14471770bc612c16bc305cef379db2569"
+      }
+    },
+    "drifting-line": {
+      "family": "hidden",
+      "kind": "drift",
+      "options": [
+        "shift:down",
+        "shift:up",
+        "no-change"
+      ],
+      "chance": 0.3333,
+      "answer": {
+        "defect": "shift:down",
+        "control": "no-change"
+      },
+      "goal": {
+        "attribution": "human",
+        "text": "The melody should end close to the pitch it started on. If in this performance it ended more than a fourth above its start, shift it down; if more than a fourth below, shift it up. If it ended close, change nothing."
+      },
+      "listening_question": "How does the pitch of the melody at the end of this passage compare with its pitch at the start?",
+      "recipe_sha256": {
+        "defect": "9be32df528ce01dd48821ccae699559bdbc3f198cf5d53a6a28befcb86fe85c7",
+        "control": "9d91844dda0736f9b2d55d4cf22129ed59cfe1ffd5bd6316aa0a0f95bb98a026"
+      }
+    }
+  }
+}
