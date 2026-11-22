@@ -19,6 +19,7 @@ import hashlib
 import inspect
 import io
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +49,9 @@ PRIMARY = {
     "renders": "defect",
     "guard": "control_false_change",
 }
+
+
+_VERSION = re.compile(r"\d+\.\d+\.\d+")
 
 
 class Mismatch(RuntimeError):
@@ -106,10 +110,10 @@ def load() -> dict:
 
 def _version(executable: str) -> str:
     proc = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=30, check=False)
-    words = proc.stdout.split()
-    if proc.returncode != 0 or not words:
+    match = _VERSION.search(proc.stdout)
+    if proc.returncode != 0 or match is None:
         raise Mismatch(f"{executable} --version failed")
-    return words[-1]
+    return match.group()
 
 
 def wav_bytes(scenario: dict, render: str) -> bytes:

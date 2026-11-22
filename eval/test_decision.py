@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -345,7 +347,9 @@ print(json.dumps({{
     "usage": {{"total_input_tokens": 50, "total_output_tokens": 10, "total_thought_tokens": 5}},
 }}))
 """
-CLI = str(Path(sys.executable).parent / "agent-listening")
+CLI = shutil.which(
+    "agent-listening", path=os.pathsep.join([str(Path(sys.executable).parent), os.environ["PATH"]])
+)
 FAKE = str(Path(__file__).parent.parent / "tests" / "fake_gemini_api.py")
 
 
@@ -479,6 +483,13 @@ def test_version_mismatch_stops_before_any_provider_call(tmp_path, one_scenario,
     refused(
         tmp_path, monkeypatch, "agent-listening 0.2.0", cli=str(old_cli), gemini_api=FAKE, caller_api=caller()
     )
+
+
+def test_version_is_read_when_the_tool_prints_a_build_line_after_it(tmp_path):
+    tool = tmp_path / "gemini-api"
+    tool.write_text(f"#!{sys.executable}\nprint('gemini-api 0.4.6')\nprint('Built: 2026-11-10T18:46:39Z')\n")
+    tool.chmod(0o755)
+    assert reg._version(str(tool)) == "0.4.6"
 
 
 def test_material_mismatch_stops_before_any_provider_call(tmp_path, one_scenario, caller, monkeypatch):
